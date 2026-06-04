@@ -11,23 +11,19 @@ const {
 
 const sqlite3 = require("sqlite3").verbose();
 
-// ================= SAFETY NET =================
+// ================= SAFETY =================
 process.on("unhandledRejection", (err) => {
   console.log("⚠️ ERROR:", err);
 });
 
-// ================= ENV CHECK =================
 if (!process.env.DISCORD_TOKEN) {
-  console.log("❌ Missing DISCORD_TOKEN in .env");
+  console.log("❌ Missing DISCORD_TOKEN");
   process.exit(1);
 }
 
 // ================= CLIENT =================
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers
-  ]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
 });
 
 // ================= DB =================
@@ -60,17 +56,16 @@ db.serialize(() => {
   )`);
 });
 
-// ================= SAFE REPLY =================
+// ================= HELPERS =================
 function reply(i, msg) {
   if (!i.replied) {
-    return i.reply({
+    i.reply({
       content: `⚙️ SCW SYSTEM → ${msg}`,
       ephemeral: true
-    });
+    }).catch(() => {});
   }
 }
 
-// ================= PLAYER INIT =================
 function ensurePlayer(guildId, userId) {
   db.run(
     `INSERT OR IGNORE INTO players VALUES (?,?,?,?,0,0,0,0)`,
@@ -80,185 +75,193 @@ function ensurePlayer(guildId, userId) {
 
 // ================= READY =================
 client.once("ready", () => {
-  console.log(`🔥 SCW SYSTEM ONLINE AS ${client.user.tag}`);
+  console.log(`🔥 SCW ONLINE AS ${client.user.tag}`);
 });
 
-// ================= COMMAND HANDLER =================
+// ================= COMMANDS =================
 client.on("interactionCreate", async (i) => {
-  try {
-    if (!i.isChatInputCommand()) return;
-    if (!i.guild) return;
+  if (!i.isChatInputCommand()) return;
+  if (!i.guild) return;
 
-    const { commandName, guild, member } = i;
+  const { commandName, guild, member } = i;
 
-    db.get(`SELECT * FROM setup WHERE guildId=?`, [guild.id], async (err, setup) => {
+  db.get(`SELECT * FROM setup WHERE guildId=?`, [guild.id], async (err, setup) => {
 
-      // ================= SETUP =================
-      if (commandName === "setup") {
-        if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-          return reply(i, "Admin required.");
+    // ================= SETUP =================
+    if (commandName === "setup") {
+      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
+        return reply(i, "Admin required.");
 
-        const owner = await guild.roles.create({ name: "SCW Owner" });
-        const admin = await guild.roles.create({ name: "SCW Admin" });
-        const mod = await guild.roles.create({ name: "SCW Mod" });
+      const owner = await guild.roles.create({ name: "SCW Owner" });
+      const admin = await guild.roles.create({ name: "SCW Admin" });
+      const mod = await guild.roles.create({ name: "SCW Mod" });
 
-        await member.roles.add(owner);
+      await member.roles.add(owner);
 
-        db.run(`INSERT INTO setup VALUES (?,?,?,?)`, [
-          guild.id,
-          owner.id,
-          admin.id,
-          mod.id
+      db.run(`INSERT INTO setup VALUES (?,?,?,?)`, [
+        guild.id,
+        owner.id,
+        admin.id,
+        mod.id
+      ]);
+
+      return reply(i, "System initialized.");
+    }
+
+    if (!setup) return reply(i, "Run /setup first.");
+
+    // ================= ADD TEAM =================
+    if (commandName === "addteam") {
+      const name = i.options.getString("name");
+
+      const role = await guild.roles.create({
+        name: `Crew ${name}`
+      });
+
+      db.run(`INSERT INTO teams VALUES (?,?,?,?,?)`, [
+        guild.id,
+        name,
+        member.id,
+        role.id,
+        JSON.stringify([member.id])
+      ]);
+
+      await member.roles.add(role);
+
+      return reply(i, `Team ${name} created.`);
+    }
+
+    // ================= SIGN PLAYER =================
+    if (commandName === "sign-player") {
+      const team = i.options.getString("team");
+      const user = i.options.getUser("user");
+
+      ensurePlayer(guild.id, user.id);
+
+      db.get(`SELECT * FROM teams WHERE teamName=?`, [team], async (e, t) => {
+        if (!t) return reply(i, "Team not found.");
+
+        let roster = JSON.parse(t.roster || "[]");
+
+        if (roster.length >= 10)
+          return reply(i, "Roster full (10 max).");
+
+        roster.push(user.id);
+
+        db.run(`UPDATE teams SET roster=? WHERE teamName=?`, [
+          JSON.stringify(roster),
+          team
         ]);
 
-        return reply(i, "System initialized.");
-      }
+        const role = guild.roles.cache.get(t.roleId);
+        const mem = await guild.members.fetch(user.id);
 
-      if (!setup) return reply(i, "Run /setup first.");
+        if (role) await mem.roles.add(role);
 
-      // ================= ADD TEAM =================
-      if (commandName === "addteam") {
-        const name = i.options.getString("name");
-
-        const role = await guild.roles.create({
-          name: `Crew ${name}`
-        });
-
-        db.run(`INSERT INTO teams VALUES (?,?,?,?,?)`, [
-          guild.id,
-          name,
-          member.id,
-          role.id,
-          JSON.stringify([member.id])
-        ]);
-
-        await member.roles.add(role);
-
-        return reply(i, `Team ${name} created.`);
-      }
-
-      // ================= SIGN =================
-      if (commandName === "sign-player") {
-        const team = i.options.getString("team");
-        const user = i.options.getUser("user");
-
-        ensurePlayer(guild.id, user.id);
-
-        db.get(`SELECT * FROM teams WHERE teamName=?`, [team], async (e, t) => {
-          if (!t) return reply(i, "Team not found.");
-
-          let roster = JSON.parse(t.roster);
-
-          if (roster.length >= 10)
-            return reply(i, "Roster full.");
-
-          roster.push(user.id);
-
-          db.run(`UPDATE teams SET roster=? WHERE teamName=?`, [
-            JSON.stringify(roster),
-            team
-          ]);
-
-          const role = guild.roles.cache.get(t.roleId);
-          const mem = await guild.members.fetch(user.id);
-
-          if (role) await mem.roles.add(role);
-
-          return reply(i, `${user.username} signed.`);
-        });
-      }
-
-      // ================= RELEASE =================
-      if (commandName === "release-player") {
-        const team = i.options.getString("team");
-        const user = i.options.getUser("user");
-
-        ensurePlayer(guild.id, user.id);
-
-        db.get(`SELECT * FROM teams WHERE teamName=?`, [team], async (e, t) => {
-          if (!t) return reply(i, "Team not found.");
-
-          let roster = JSON.parse(t.roster);
-          roster = roster.filter(id => id !== user.id);
-
-          db.run(`UPDATE teams SET roster=? WHERE teamName=?`, [
-            JSON.stringify(roster),
-            team
-          ]);
-
-          const role = guild.roles.cache.get(t.roleId);
-          const mem = await guild.members.fetch(user.id);
-
-          if (role) await mem.roles.remove(role);
-
-          return reply(i, `${user.username} released.`);
-        });
-      }
-
-      // ================= STRIKE =================
-      if (commandName === "strike") {
-        const user = i.options.getUser("user");
-        ensurePlayer(guild.id, user.id);
-
-        db.run(`UPDATE players SET strikes = strikes + 1 WHERE userId=?`, [
+        db.run(`UPDATE players SET team=? WHERE userId=?`, [
+          team,
           user.id
         ]);
 
-        return reply(i, `${user.username} +1 strike`);
-      }
+        return reply(i, `${user.username} signed.`);
+      });
+    }
 
-      // ================= SUSPEND =================
-      if (commandName === "suspend") {
-        const user = i.options.getUser("user");
-        const mins = i.options.getInteger("minutes");
+    // ================= RELEASE PLAYER =================
+    if (commandName === "release-player") {
+      const team = i.options.getString("team");
+      const user = i.options.getUser("user");
 
-        ensurePlayer(guild.id, user.id);
+      ensurePlayer(guild.id, user.id);
 
-        db.run(`UPDATE players SET suspended=? WHERE userId=?`, [
-          Date.now() + mins * 60000,
+      db.get(`SELECT * FROM teams WHERE teamName=?`, [team], async (e, t) => {
+        if (!t) return reply(i, "Team not found.");
+
+        let roster = JSON.parse(t.roster || "[]");
+        roster = roster.filter(id => id !== user.id);
+
+        db.run(`UPDATE teams SET roster=? WHERE teamName=?`, [
+          JSON.stringify(roster),
+          team
+        ]);
+
+        const role = guild.roles.cache.get(t.roleId);
+        const mem = await guild.members.fetch(user.id);
+
+        if (role) await mem.roles.remove(role);
+
+        db.run(`UPDATE players SET team=NULL WHERE userId=?`, [
           user.id
         ]);
 
-        return reply(i, `${user.username} suspended`);
-      }
+        return reply(i, `${user.username} released.`);
+      });
+    }
 
-      // ================= WIN =================
-      if (commandName === "win") {
-        const user = i.options.getUser("user");
-        ensurePlayer(guild.id, user.id);
+    // ================= STRIKE =================
+    if (commandName === "strike") {
+      const user = i.options.getUser("user");
+      const reason = i.options.getString("reason");
 
-        db.run(`UPDATE players SET wins = wins + 1 WHERE userId=?`, [
-          user.id
-        ]);
+      ensurePlayer(guild.id, user.id);
 
-        return reply(i, `${user.username} +1 win`);
-      }
+      db.run(`UPDATE players SET strikes = strikes + 1 WHERE userId=?`, [
+        user.id
+      ]);
 
-      // ================= LOSS =================
-      if (commandName === "loss") {
-        const user = i.options.getUser("user");
-        ensurePlayer(guild.id, user.id);
+      return reply(i, `${user.username} +1 strike (${reason})`);
+    }
 
-        db.run(`UPDATE players SET losses = losses + 1 WHERE userId=?`, [
-          user.id
-        ]);
+    // ================= SUSPEND =================
+    if (commandName === "suspend") {
+      const user = i.options.getUser("user");
+      const mins = i.options.getInteger("minutes");
 
-        return reply(i, `${user.username} +1 loss`);
-      }
-    });
+      ensurePlayer(guild.id, user.id);
 
-  } catch (err) {
-    console.log("COMMAND ERROR:", err);
-  }
+      db.run(`UPDATE players SET suspended=? WHERE userId=?`, [
+        Date.now() + mins * 60000,
+        user.id
+      ]);
+
+      return reply(i, `${user.username} suspended for ${mins}m`);
+    }
+
+    // ================= WIN =================
+    if (commandName === "win") {
+      const user = i.options.getUser("user");
+
+      ensurePlayer(guild.id, user.id);
+
+      db.run(`UPDATE players SET wins = wins + 1 WHERE userId=?`, [
+        user.id
+      ]);
+
+      return reply(i, `${user.username} +1 win`);
+    }
+
+    // ================= LOSS =================
+    if (commandName === "loss") {
+      const user = i.options.getUser("user");
+
+      ensurePlayer(guild.id, user.id);
+
+      db.run(`UPDATE players SET losses = losses + 1 WHERE userId=?`, [
+        user.id
+      ]);
+
+      return reply(i, `${user.username} +1 loss`);
+    }
+  });
 });
 
-// ================= COMMAND REGISTER =================
+// ================= REGISTER COMMANDS =================
 const commands = [
-  new SlashCommandBuilder().setName("setup").setDescription("Init system"),
+  new SlashCommandBuilder().setName("setup").setDescription("Initialize system"),
 
   new SlashCommandBuilder()
     .setName("addteam")
-    .setDescription("Create team")
+    .setDescription("Create a team")
     .addStringOption(o => o.setName("name").setRequired(true)),
 
   new SlashCommandBuilder()
@@ -275,8 +278,9 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("strike")
-    .setDescription("Strike player")
-    .addUserOption(o => o.setName("user").setRequired(true)),
+    .setDescription("Give strike")
+    .addUserOption(o => o.setName("user").setRequired(true))
+    .addStringOption(o => o.setName("reason").setRequired(true)),
 
   new SlashCommandBuilder()
     .setName("suspend")
@@ -309,7 +313,7 @@ const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
 
     console.log("⚙️ Commands registered");
   } catch (err) {
-    console.log("REGISTER ERROR:", err);
+    console.log("COMMAND ERROR:", err);
   }
 });
 
