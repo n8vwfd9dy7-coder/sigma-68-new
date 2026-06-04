@@ -5,7 +5,6 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
-// ENV
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 
@@ -13,30 +12,23 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const db = new sqlite3.Database("./scw.db");
 
 db.serialize(() => {
-  db.run(`CREATE TABLE IF NOT EXISTS teams (
-    name TEXT PRIMARY KEY
-  )`);
-
-  db.run(`CREATE TABLE IF NOT EXISTS players (
-    player TEXT,
-    team TEXT
-  )`);
-
-  db.run(`CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT
-  )`);
+  db.run(`CREATE TABLE IF NOT EXISTS teams (name TEXT PRIMARY KEY)`);
+  db.run(`CREATE TABLE IF NOT EXISTS players (player TEXT, team TEXT)`);
+  db.run(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`);
 });
 
-// SLASH COMMANDS
+// COMMANDS (THIS IS WHY YOU ONLY SAW 2 BEFORE)
 const commands = [
+  { name: "help", description: "SCW help menu" },
+
   {
-    name: "help",
-    description: "Show help menu",
+    name: "setup",
+    description: "Initialize SCW system",
   },
+
   {
     name: "addteam",
-    description: "Add a team",
+    description: "Create a team",
     options: [
       {
         name: "name",
@@ -46,17 +38,34 @@ const commands = [
       },
     ],
   },
+
   {
     name: "sign-player",
-    description: "Sign player to team",
+    description: "Sign player",
     options: [
       { name: "player", type: 3, required: true, description: "Player name" },
       { name: "team", type: 3, required: true, description: "Team name" },
     ],
   },
+
+  {
+    name: "release-player",
+    description: "Release player",
+    options: [
+      { name: "player", type: 3, required: true },
+    ],
+  },
+
+  {
+    name: "roster",
+    description: "Show team roster",
+    options: [
+      { name: "team", type: 3, required: true },
+    ],
+  },
 ];
 
-// REGISTER COMMANDS
+// REGISTER SLASH COMMANDS
 const rest = new REST({ version: "10" }).setToken(TOKEN);
 
 async function registerCommands() {
@@ -67,11 +76,11 @@ async function registerCommands() {
     });
     console.log("Slash commands registered.");
   } catch (err) {
-    console.log(err);
+    console.log("Command register error:", err);
   }
 }
 
-// BOT READY
+// READY EVENT
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
   console.log("SCW V2 CORE ONLINE");
@@ -79,7 +88,7 @@ client.once("ready", async () => {
   await registerCommands();
 });
 
-// INTERACTION HANDLER (THIS FIXES YOUR ISSUE)
+// INTERACTION HANDLER (THIS WAS YOUR MAIN ISSUE)
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
@@ -88,9 +97,12 @@ client.on("interactionCreate", async (interaction) => {
   try {
     // HELP
     if (cmd === "help") {
-      return interaction.reply(
-        "📘 SCW Commands:\n/help\n/addteam\n/sign-player"
-      );
+      return interaction.reply("📘 SCW v2 System Online");
+    }
+
+    // SETUP
+    if (cmd === "setup") {
+      return interaction.reply("✅ SCW system is already running on Railway");
     }
 
     // ADD TEAM
@@ -112,15 +124,41 @@ client.on("interactionCreate", async (interaction) => {
         team,
       ]);
 
-      return interaction.reply(
-        `✅ ${player} signed to **${team}**`
+      return interaction.reply(`✅ ${player} signed to **${team}**`);
+    }
+
+    // RELEASE PLAYER
+    if (cmd === "release-player") {
+      const player = interaction.options.getString("player");
+
+      db.run("DELETE FROM players WHERE player = ?", [player]);
+
+      return interaction.reply(`🗑️ ${player} released`);
+    }
+
+    // ROSTER
+    if (cmd === "roster") {
+      const team = interaction.options.getString("team");
+
+      db.all(
+        "SELECT player FROM players WHERE team = ?",
+        [team],
+        (err, rows) => {
+          if (err) return interaction.reply("❌ DB error");
+
+          const list = rows.map(r => r.player).join(", ") || "No players";
+
+          interaction.reply(`📋 ${team} roster:\n${list}`);
+        }
       );
+
+      return;
     }
   } catch (err) {
     console.log(err);
 
     if (!interaction.replied) {
-      return interaction.reply("❌ Command error occurred");
+      return interaction.reply("❌ Command error");
     }
   }
 });
