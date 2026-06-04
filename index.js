@@ -10,28 +10,43 @@ const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 
-// SAFETY CHECK
-if (!TOKEN || !CLIENT_ID || !GUILD_ID) {
-  console.log("❌ Missing ENV variables");
-}
-
 // DB
 const db = new sqlite3.Database("./scw.db");
 
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS teams (name TEXT PRIMARY KEY)`);
   db.run(`CREATE TABLE IF NOT EXISTS players (player TEXT, team TEXT)`);
+  db.run(`CREATE TABLE IF NOT EXISTS permissions (user TEXT PRIMARY KEY, role TEXT)`);
+  db.run(`CREATE TABLE IF NOT EXISTS strikes (player TEXT, count INTEGER DEFAULT 0)`);
+  db.run(`CREATE TABLE IF NOT EXISTS warns (user TEXT, count INTEGER DEFAULT 0)`);
+  db.run(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`);
 });
 
-// COMMANDS (FIXED + VALID)
-const commands = [
-  { name: "help", description: "SCW help menu" },
+// ROLES
+const ROLE = { owner: 3, admin: 2, mod: 1, user: 0 };
 
-  { name: "setup", description: "Setup SCW system" },
+function getRole(userId) {
+  return new Promise(res => {
+    db.get("SELECT role FROM permissions WHERE user = ?", [userId], (err, row) => {
+      if (!row) return res("user");
+      res(row.role);
+    });
+  });
+}
+
+async function has(userId, role) {
+  const r = await getRole(userId);
+  return ROLE[r] >= ROLE[role];
+}
+
+// COMMANDS (ALL FIXED FOR DISCORD)
+const commands = [
+  { name: "help", description: "View all commands" },
+  { name: "setup", description: "Configure system (Admin)" },
 
   {
     name: "addteam",
-    description: "Add a team",
+    description: "Create a new team",
     options: [
       {
         name: "name",
@@ -43,47 +58,103 @@ const commands = [
   },
 
   {
-    name: "sign-player",
-    description: "Sign player to a team",
+    name: "appoint",
+    description: "Set user role (Owner only)",
     options: [
-      {
-        name: "player",
-        description: "Player name",
-        type: 3,
-        required: true,
-      },
-      {
-        name: "team",
-        description: "Team name",
-        type: 3,
-        required: true,
-      },
+      { name: "user", description: "User", type: 6, required: true },
+      { name: "role", description: "owner/admin/mod", type: 3, required: true },
     ],
   },
 
   {
-    name: "release-player",
-    description: "Release a player",
+    name: "sign-player",
+    description: "Sign player to team",
     options: [
-      {
-        name: "player",
-        description: "Player name",
-        type: 3,
-        required: true,
-      },
+      { name: "player", description: "Player", type: 3, required: true },
+      { name: "team", description: "Team", type: 3, required: true },
+    ],
+  },
+
+  {
+    name: "release",
+    description: "Release player",
+    options: [
+      { name: "player", description: "Player", type: 3, required: true },
     ],
   },
 
   {
     name: "roster",
-    description: "Show team roster",
+    description: "View team roster",
     options: [
-      {
-        name: "team",
-        description: "Team name",
-        type: 3,
-        required: true,
-      },
+      { name: "team", description: "Team", type: 3, required: true },
+    ],
+  },
+
+  {
+    name: "strike",
+    description: "Give player strike",
+    options: [
+      { name: "player", description: "Player", type: 3, required: true },
+    ],
+  },
+
+  {
+    name: "warn",
+    description: "Warn a user",
+    options: [
+      { name: "user", description: "User", type: 6, required: true },
+    ],
+  },
+
+  {
+    name: "warns",
+    description: "Check warnings",
+    options: [
+      { name: "user", description: "User", type: 6, required: true },
+    ],
+  },
+
+  { name: "transactions-lock", description: "Lock signings" },
+  { name: "transactions-unlock", description: "Unlock signings" },
+
+  {
+    name: "clearstrike",
+    description: "Clear strikes",
+    options: [
+      { name: "player", description: "Player", type: 3, required: true },
+    ],
+  },
+
+  {
+    name: "clearwarn",
+    description: "Clear warns",
+    options: [
+      { name: "user", description: "User", type: 6, required: true },
+    ],
+  },
+
+  {
+    name: "ban",
+    description: "Ban user (Admin)",
+    options: [
+      { name: "user", description: "User", type: 6, required: true },
+    ],
+  },
+
+  {
+    name: "kick",
+    description: "Kick user (Mod+)",
+    options: [
+      { name: "user", description: "User", type: 6, required: true },
+    ],
+  },
+
+  {
+    name: "mute",
+    description: "Timeout user",
+    options: [
+      { name: "user", description: "User", type: 6, required: true },
     ],
   },
 ];
@@ -91,37 +162,19 @@ const commands = [
 // REST
 const rest = new REST({ version: "10" }).setToken(TOKEN);
 
-// COMMAND DEPLOY
+// REGISTER COMMANDS
 async function registerCommands() {
   try {
-    console.log("🔥 STARTING COMMAND DEPLOY");
-    console.log("CLIENT_ID:", CLIENT_ID);
-    console.log("GUILD_ID:", GUILD_ID);
-    console.log("TOTAL COMMANDS:", commands.length);
+    console.log("🔥 Registering SCW commands...");
+    console.log("Total:", commands.length);
 
-    console.log("📦 COMMAND LIST:");
-    commands.forEach(c => console.log("-", c.name));
-
-    // WIPE GLOBAL + GUILD
-    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
-    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: [] });
-
-    console.log("🧹 CLEARED OLD COMMANDS");
-
-    await new Promise(r => setTimeout(r, 2000));
-
-    // REGISTER
-    const response = await rest.put(
+    await rest.put(
       Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
       { body: commands }
     );
 
-    console.log("✅ REGISTER COMPLETE");
-    console.log("RETURNED COUNT:", response.length);
-    console.log("COMMANDS:", response.map(c => c.name));
-
+    console.log("✅ Commands registered");
   } catch (err) {
-    console.log("❌ COMMAND ERROR:");
     console.log(err);
   }
 }
@@ -129,58 +182,117 @@ async function registerCommands() {
 // READY
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
-  console.log("SCW V2 ONLINE");
-
-  console.log("🚨 ENTERING COMMAND SYNC...");
   await registerCommands();
-  console.log("🚨 COMMAND SYNC DONE");
 });
 
-// COMMAND HANDLER
-client.on("interactionCreate", async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-
-  const cmd = interaction.commandName;
+// HANDLER
+client.on("interactionCreate", async (i) => {
+  if (!i.isChatInputCommand()) return;
+  const cmd = i.commandName;
 
   try {
-    if (cmd === "help") return interaction.reply("📘 SCW v2 System Online");
-    if (cmd === "setup") return interaction.reply("✅ System ready");
+    if (cmd === "help") return i.reply("📘 SCW Bot Online");
+
+    if (cmd === "setup") {
+      if (!(await has(i.user.id, "admin"))) return i.reply("❌ Admin only");
+      return i.reply("✅ Setup complete");
+    }
 
     if (cmd === "addteam") {
-      const name = interaction.options.getString("name");
-      db.run("INSERT INTO teams (name) VALUES (?)", [name]);
-      return interaction.reply(`✅ Team ${name} created`);
+      if (!(await has(i.user.id, "admin"))) return i.reply("❌ Admin only");
+
+      const name = i.options.getString("name");
+      db.run("INSERT INTO teams VALUES (?)", [name]);
+      return i.reply(`✅ Team ${name} created`);
+    }
+
+    if (cmd === "appoint") {
+      if (!(await has(i.user.id, "owner"))) return i.reply("❌ Owner only");
+
+      const user = i.options.getUser("user");
+      const role = i.options.getString("role");
+
+      db.run(
+        "INSERT OR REPLACE INTO permissions VALUES (?, ?)",
+        [user.id, role]
+      );
+
+      return i.reply(`✅ ${user.username} = ${role}`);
     }
 
     if (cmd === "sign-player") {
-      const player = interaction.options.getString("player");
-      const team = interaction.options.getString("team");
-      db.run("INSERT INTO players (player, team) VALUES (?, ?)", [player, team]);
-      return interaction.reply(`✅ ${player} signed to ${team}`);
+      const p = i.options.getString("player");
+      const t = i.options.getString("team");
+
+      db.run("INSERT INTO players VALUES (?, ?)", [p, t]);
+      return i.reply(`✅ ${p} signed to ${t}`);
     }
 
-    if (cmd === "release-player") {
-      const player = interaction.options.getString("player");
-      db.run("DELETE FROM players WHERE player = ?", [player]);
-      return interaction.reply(`🗑️ ${player} released`);
+    if (cmd === "release") {
+      const p = i.options.getString("player");
+      db.run("DELETE FROM players WHERE player = ?", [p]);
+      return i.reply(`🗑️ Released ${p}`);
     }
 
     if (cmd === "roster") {
-      const team = interaction.options.getString("team");
+      const t = i.options.getString("team");
 
-      db.all("SELECT player FROM players WHERE team = ?", [team], (err, rows) => {
-        if (err) return interaction.reply("❌ DB error");
-
+      db.all("SELECT player FROM players WHERE team = ?", [t], (err, rows) => {
         const list = rows.map(r => r.player).join(", ") || "No players";
-        interaction.reply(`📋 ${team} roster:\n${list}`);
+        i.reply(`📋 ${t}: ${list}`);
       });
     }
 
-  } catch (err) {
-    console.log(err);
-    if (!interaction.replied) {
-      return interaction.reply("❌ Error occurred");
+    if (cmd === "strike") {
+      const p = i.options.getString("player");
+
+      db.run(
+        `INSERT INTO strikes(player,count)
+         VALUES(?,1)
+         ON CONFLICT(player) DO UPDATE SET count=count+1`,
+        [p]
+      );
+
+      return i.reply(`⚠️ Strike added to ${p}`);
     }
+
+    if (cmd === "transactions-lock") {
+      db.run("INSERT OR REPLACE INTO settings VALUES ('lock','true')");
+      return i.reply("🔒 Transactions locked");
+    }
+
+    if (cmd === "transactions-unlock") {
+      db.run("INSERT OR REPLACE INTO settings VALUES ('lock','false')");
+      return i.reply("🔓 Transactions unlocked");
+    }
+
+    if (cmd === "kick") {
+      if (!(await has(i.user.id, "mod"))) return i.reply("❌ Mod only");
+      const user = i.options.getUser("user");
+      const member = await i.guild.members.fetch(user.id);
+      await member.kick();
+      return i.reply("👢 Kicked user");
+    }
+
+    if (cmd === "ban") {
+      if (!(await has(i.user.id, "admin"))) return i.reply("❌ Admin only");
+      const user = i.options.getUser("user");
+      const member = await i.guild.members.fetch(user.id);
+      await member.ban();
+      return i.reply("🔨 Banned user");
+    }
+
+    if (cmd === "mute") {
+      if (!(await has(i.user.id, "mod"))) return i.reply("❌ Mod only");
+      const user = i.options.getUser("user");
+      const member = await i.guild.members.fetch(user.id);
+      await member.timeout(60_000 * 10);
+      return i.reply("🔇 Muted user");
+    }
+
+  } catch (e) {
+    console.log(e);
+    if (!i.replied) i.reply("❌ Error");
   }
 });
 
