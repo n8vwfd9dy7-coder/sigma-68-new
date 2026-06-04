@@ -7,8 +7,9 @@ const client = new Client({
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
+const GUILD_ID = process.env.GUILD_ID; // 🔥 IMPORTANT (add this in Railway)
 
-// 🔥 DATABASE
+// DATABASE
 const db = new sqlite3.Database("./scw.db");
 
 db.serialize(() => {
@@ -16,7 +17,7 @@ db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS players (player TEXT, team TEXT)`);
 });
 
-// 🔥 ALL COMMANDS (THIS IS WHY YOU ONLY SAW 2 BEFORE)
+// ALL COMMANDS
 const commands = [
   { name: "help", description: "SCW help menu" },
   { name: "setup", description: "Setup SCW system" },
@@ -28,28 +29,18 @@ const commands = [
       {
         name: "name",
         type: 3,
-        description: "Team name",
         required: true,
+        description: "Team name",
       },
     ],
   },
 
   {
     name: "sign-player",
-    description: "Sign player to team",
+    description: "Sign player",
     options: [
-      {
-        name: "player",
-        type: 3,
-        description: "Player name",
-        required: true,
-      },
-      {
-        name: "team",
-        type: 3,
-        description: "Team name",
-        required: true,
-      },
+      { name: "player", type: 3, required: true, description: "Player name" },
+      { name: "team", type: 3, required: true, description: "Team name" },
     ],
   },
 
@@ -57,11 +48,7 @@ const commands = [
     name: "release-player",
     description: "Release player",
     options: [
-      {
-        name: "player",
-        type: 3,
-        required: true,
-      },
+      { name: "player", type: 3, required: true },
     ],
   },
 
@@ -69,46 +56,43 @@ const commands = [
     name: "roster",
     description: "Show team roster",
     options: [
-      {
-        name: "team",
-        type: 3,
-        required: true,
-      },
+      { name: "team", type: 3, required: true },
     ],
   },
 ];
 
-// 🔥 DEBUG PRINT (IMPORTANT)
-console.log("=== SCW BOT FILE STARTED ===");
-console.log("Commands loaded:", commands.map(c => c.name));
+// DEBUG
+console.log("SCW BOT STARTING...");
+console.log("Commands:", commands.map(c => c.name));
 
-// 🔥 REGISTER COMMANDS
+// REST
 const rest = new REST({ version: "10" }).setToken(TOKEN);
 
+// 🔥 FORCE GUILD COMMAND SYNC (FIXES YOUR ISSUE)
 async function registerCommands() {
   try {
-    console.log("Registering slash commands...");
+    console.log("Registering GUILD slash commands...");
 
     await rest.put(
-      Routes.applicationCommands(CLIENT_ID),
+      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
       { body: commands }
     );
 
-    console.log("✅ Slash commands registered successfully");
+    console.log("✅ Commands fully synced to guild");
   } catch (err) {
-    console.log("❌ Command registration error:", err);
+    console.log("❌ Register error:", err);
   }
 }
 
-// 🔥 READY
+// READY
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
-  console.log("SCW V2 CORE ONLINE");
+  console.log("SCW V2 ONLINE");
 
   await registerCommands();
 });
 
-// 🔥 COMMAND HANDLER
+// HANDLER
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
@@ -120,7 +104,7 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (cmd === "setup") {
-      return interaction.reply("✅ SCW system is running on Railway");
+      return interaction.reply("✅ System ready (Guild mode active)");
     }
 
     if (cmd === "addteam") {
@@ -128,7 +112,7 @@ client.on("interactionCreate", async (interaction) => {
 
       db.run("INSERT INTO teams (name) VALUES (?)", [name]);
 
-      return interaction.reply(`✅ Team **${name}** created`);
+      return interaction.reply(`✅ Team ${name} created`);
     }
 
     if (cmd === "sign-player") {
@@ -140,7 +124,7 @@ client.on("interactionCreate", async (interaction) => {
         team,
       ]);
 
-      return interaction.reply(`✅ ${player} signed to **${team}**`);
+      return interaction.reply(`✅ ${player} signed to ${team}`);
     }
 
     if (cmd === "release-player") {
@@ -154,26 +138,22 @@ client.on("interactionCreate", async (interaction) => {
     if (cmd === "roster") {
       const team = interaction.options.getString("team");
 
-      db.all(
-        "SELECT player FROM players WHERE team = ?",
-        [team],
-        (err, rows) => {
-          if (err) return interaction.reply("❌ DB error");
+      db.all("SELECT player FROM players WHERE team = ?", [team], (err, rows) => {
+        if (err) return interaction.reply("❌ DB error");
 
-          const list = rows.map(r => r.player).join(", ") || "No players";
+        const list = rows.map(r => r.player).join(", ") || "No players";
 
-          interaction.reply(`📋 ${team} roster:\n${list}`);
-        }
-      );
+        interaction.reply(`📋 ${team} roster:\n${list}`);
+      });
     }
   } catch (err) {
     console.log(err);
 
     if (!interaction.replied) {
-      return interaction.reply("❌ Command error");
+      return interaction.reply("❌ Error occurred");
     }
   }
 });
 
-// 🔥 LOGIN
+// LOGIN
 client.login(TOKEN);
