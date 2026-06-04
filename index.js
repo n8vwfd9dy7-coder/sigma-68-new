@@ -1,15 +1,37 @@
 const { Client, GatewayIntentBits } = require("discord.js");
+const sqlite3 = require("sqlite3").verbose();
 
+// ===== DATABASE =====
+const db = new sqlite3.Database("./scw.db");
+
+// Create tables
+db.serialize(() => {
+  db.run("CREATE TABLE IF NOT EXISTS warns (userId TEXT, reason TEXT)");
+  db.run("CREATE TABLE IF NOT EXISTS teams (name TEXT, owner TEXT)");
+  db.run("CREATE TABLE IF NOT EXISTS roster (team TEXT, userId TEXT)");
+  db.run("CREATE TABLE IF NOT EXISTS strikes (team TEXT, count INTEGER)");
+  db.run("CREATE TABLE IF NOT EXISTS settings (key TEXT, value TEXT)");
+});
+
+// ===== BOT =====
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers
-  ]
+  intents: [GatewayIntentBits.Guilds]
 });
 
 client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}`);
 });
+
+// helper functions
+function getSetting(key, cb) {
+  db.get("SELECT value FROM settings WHERE key = ?", [key], (err, row) => {
+    cb(row ? row.value : null);
+  });
+}
+
+function setSetting(key, value) {
+  db.run("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", [key, value]);
+}
 
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
@@ -18,53 +40,91 @@ client.on("interactionCreate", async (interaction) => {
 
   try {
 
-    if (cmd === "help") return interaction.reply("📜 SCW Commands loaded.");
-    if (cmd === "addteam") return interaction.reply("➕ Team created.");
-    if (cmd === "appoint") return interaction.reply("👑 Owner appointed.");
-    if (cmd === "bail") return interaction.reply("🟢 Suspension lifted early.");
-    if (cmd === "ban") return interaction.reply("⛔ Member banned.");
-    if (cmd === "clearstrike") return interaction.reply("🧹 All team strikes cleared.");
-    if (cmd === "clearwarn") return interaction.reply("🧹 Warnings cleared.");
+    // ================= WARN SYSTEM =================
+    if (cmd === "warn") {
+      const user = interaction.options.getUser("user");
+      const reason = interaction.options.getString("reason") || "No reason";
 
-    if (cmd === "crew-rename") return interaction.reply("✏️ Crew renamed.");
-    if (cmd === "demand") return interaction.reply("📢 Demand processed.");
-    if (cmd === "demote") return interaction.reply("⬇️ Player demoted.");
-    if (cmd === "disband") return interaction.reply("💥 Team disbanded.");
-    if (cmd === "kick") return interaction.reply("👢 Member kicked.");
-    if (cmd === "modstrike") return interaction.reply("📛 Mod strike issued.");
-    if (cmd === "mute") return interaction.reply("🔇 Member muted.");
-    if (cmd === "promote") return interaction.reply("⬆️ Player promoted.");
-    if (cmd === "release") return interaction.reply("📤 Player released.");
-    if (cmd === "roleall") return interaction.reply("🔄 Roles assigned to everyone.");
-    if (cmd === "roster") return interaction.reply("📋 Team roster displayed.");
-    if (cmd === "score") return interaction.reply("🏆 Score recorded.");
-    if (cmd === "setup") return interaction.reply("⚙️ Setup complete.");
-    if (cmd === "strike") return interaction.reply("⚠️ Team strike issued.");
-    if (cmd === "suspend") return interaction.reply("⛔ Player suspended.");
+      db.run("INSERT INTO warns (userId, reason) VALUES (?, ?)", [user.id, reason]);
 
-    if (cmd === "transactions-lock") {
-      return interaction.reply("🔒 Transactions locked.");
+      return interaction.reply(`⚠️ ${user.username} warned: ${reason}`);
     }
 
-    if (cmd === "transactions-unlock") {
-      return interaction.reply("🔓 Transactions unlocked.");
+    if (cmd === "warns") {
+      const user = interaction.options.getUser("user");
+
+      db.all("SELECT reason FROM warns WHERE userId = ?", [user.id], (err, rows) => {
+        const list = rows.map(r => `• ${r.reason}`).join("\n") || "No warnings";
+
+        interaction.reply(`📄 Warnings for ${user.username}:\n${list}`);
+      });
+
+      return;
     }
 
-    if (cmd === "warn") return interaction.reply("⚠️ User warned.");
-    if (cmd === "warns") return interaction.reply("📄 Showing warnings.");
+    // ================= TEAM SYSTEM =================
+    if (cmd === "addteam") {
+      const name = interaction.options.getString("name");
 
-    return interaction.reply({
-      content: `❓ Unknown command: /${cmd}`,
-      ephemeral: true
-    });
+      db.run("INSERT INTO teams (name, owner) VALUES (?, ?)", [
+        name,
+        interaction.user.id
+      ]);
+
+      return interaction.reply(`➕ Team **${name}** created.`);
+    }
+
+    if (cmd === "roster") {
+      const team = interaction.options.getString("team");
+
+      db.all("SELECT userId FROM roster WHERE team = ?", [team], (err, rows) => {
+        const list = rows.map(r => `<@${r.userId}>`).join("\n") || "Empty team";
+
+        interaction.reply(`📋 Roster for ${team}:\n${list}`);
+      });
+
+      return;
+    }
+
+    // ================= STRIKES =================
+    if (cmd === "strike") {
+      const team = interaction.options.getString("team");
+
+      db.get("SELECT count FROM strikes WHERE team = ?", [team], (err, row) => {
+        let count = row ? row.count + 1 : 1;
+
+        db.run("INSERT OR REPLACE INTO strikes (team, count) VALUES (?, ?)", [team, count]);
+
+        if (count >= 3) {
+          db.run("DELETE FROM strikes WHERE team = ?", [team]);
+          return interaction.reply(`🚨 ${team} reached 3 strikes and was penalized.`);
+        }
+
+        interaction.reply(`⚠️ ${team} now has ${count} strike(s).`);
+      });
+
+      return;
+    }
+
+    // ================= TRANSACTIONS =================
+    if (cmd === "transactions lock") {
+      setSetting("transactions", "locked");
+      return interaction.reply("🔒 Transactions LOCKED.");
+    }
+
+    if (cmd === "transactions unlock") {
+      setSetting("transactions", "unlocked");
+      return interaction.reply("🔓 Transactions UNLOCKED.");
+    }
+
+    // ================= DEFAULT =================
+    return interaction.reply(`❓ Unknown command: /${cmd}`);
 
   } catch (err) {
     console.error(err);
+
     if (!interaction.replied) {
-      interaction.reply({
-        content: "❌ Error running command.",
-        ephemeral: true
-      });
+      interaction.reply("❌ Error running command.");
     }
   }
 });
