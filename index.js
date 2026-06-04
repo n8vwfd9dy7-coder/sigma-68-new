@@ -13,10 +13,12 @@ const sqlite3 = require("sqlite3").verbose();
 
 // ================= CLIENT =================
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers
-  ]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
+});
+
+// ================= SAFE ERROR LOGGING =================
+process.on("unhandledRejection", err => {
+  console.log("⚠️ ERROR:", err);
 });
 
 // ================= DATABASE =================
@@ -49,7 +51,7 @@ db.serialize(() => {
   )`);
 });
 
-// ================= SAFE REPLY =================
+// ================= SYSTEM REPLY =================
 function reply(i, msg) {
   if (!i.replied) {
     return i.reply({
@@ -59,7 +61,7 @@ function reply(i, msg) {
   }
 }
 
-// ================= PLAYER =================
+// ================= PLAYER INIT =================
 function ensurePlayer(guildId, userId) {
   db.run(
     `INSERT OR IGNORE INTO players VALUES (?,?,?,?,0,0,0,0)`,
@@ -69,12 +71,13 @@ function ensurePlayer(guildId, userId) {
 
 // ================= READY =================
 client.once("ready", () => {
-  console.log(`🔥 SCW FJX CLEAN ONLINE AS ${client.user.tag}`);
+  console.log(`🔥 SCW FULL SYSTEM ONLINE AS ${client.user.tag}`);
 });
 
 // ================= COMMAND HANDLER =================
 client.on("interactionCreate", async (i) => {
   if (!i.isChatInputCommand()) return;
+  if (!i.guild) return;
 
   const { commandName, guild, member } = i;
 
@@ -83,7 +86,7 @@ client.on("interactionCreate", async (i) => {
     // ================= SETUP =================
     if (commandName === "setup") {
       if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-        return reply(i, "Admin only.");
+        return reply(i, "Admin required.");
 
       const owner = await guild.roles.create({ name: "SCW Owner" });
       const admin = await guild.roles.create({ name: "SCW Admin" });
@@ -101,14 +104,15 @@ client.on("interactionCreate", async (i) => {
       return reply(i, "System initialized.");
     }
 
-    if (!setup)
-      return reply(i, "Run /setup first.");
+    if (!setup) return reply(i, "Run /setup first.");
 
     // ================= ADD TEAM =================
     if (commandName === "addteam") {
       const name = i.options.getString("name");
 
-      const role = await guild.roles.create({ name: `Crew ${name}` });
+      const role = await guild.roles.create({
+        name: `Crew ${name}`
+      });
 
       db.run(`INSERT INTO teams VALUES (?,?,?,?,?)`, [
         guild.id,
@@ -123,7 +127,7 @@ client.on("interactionCreate", async (i) => {
       return reply(i, `Team ${name} created.`);
     }
 
-    // ================= SIGN =================
+    // ================= SIGN PLAYER =================
     if (commandName === "sign-player") {
       const team = i.options.getString("team");
       const user = i.options.getUser("user");
@@ -136,7 +140,7 @@ client.on("interactionCreate", async (i) => {
         let roster = JSON.parse(t.roster);
 
         if (roster.length >= 10)
-          return reply(i, "Roster full.");
+          return reply(i, "Roster full (10 max).");
 
         roster.push(user.id);
 
@@ -259,7 +263,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("strike")
-    .setDescription("Strike player")
+    .setDescription("Give strike")
     .addUserOption(o => o.setName("user").setRequired(true)),
 
   new SlashCommandBuilder()
@@ -270,15 +274,16 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("win")
-    .setDescription("Win add")
+    .setDescription("Add win")
     .addUserOption(o => o.setName("user").setRequired(true)),
 
   new SlashCommandBuilder()
     .setName("loss")
-    .setDescription("Loss add")
+    .setDescription("Add loss")
     .addUserOption(o => o.setName("user").setRequired(true))
 ].map(c => c.toJSON());
 
+// ================= REGISTER =================
 const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
 
 (async () => {
@@ -291,9 +296,9 @@ const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
       { body: commands }
     );
 
-    console.log("⚙️ Commands loaded");
+    console.log("⚙️ Commands registered");
   } catch (err) {
-    console.log("Command error:", err);
+    console.log("COMMAND ERROR:", err);
   }
 });
 
