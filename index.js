@@ -5,11 +5,12 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
+// ENV
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 
-// DATABASE
+// DB
 const db = new sqlite3.Database("./scw.db");
 
 db.serialize(() => {
@@ -17,11 +18,10 @@ db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS players (player TEXT, team TEXT)`);
 });
 
-// COMMANDS (CLEAN LIST)
+// COMMANDS
 const commands = [
   { name: "help", description: "SCW help menu" },
   { name: "setup", description: "Setup SCW system" },
-
   {
     name: "addteam",
     description: "Add a team",
@@ -34,47 +34,26 @@ const commands = [
       },
     ],
   },
-
   {
     name: "sign-player",
     description: "Sign player",
     options: [
-      {
-        name: "player",
-        type: 3,
-        required: true,
-        description: "Player name",
-      },
-      {
-        name: "team",
-        type: 3,
-        required: true,
-        description: "Team name",
-      },
+      { name: "player", type: 3, required: true, description: "Player name" },
+      { name: "team", type: 3, required: true, description: "Team name" },
     ],
   },
-
   {
     name: "release-player",
     description: "Release player",
     options: [
-      {
-        name: "player",
-        type: 3,
-        required: true,
-      },
+      { name: "player", type: 3, required: true },
     ],
   },
-
   {
     name: "roster",
-    description: "Show team roster",
+    description: "Show roster",
     options: [
-      {
-        name: "team",
-        type: 3,
-        required: true,
-      },
+      { name: "team", type: 3, required: true },
     ],
   },
 ];
@@ -82,27 +61,41 @@ const commands = [
 // REST
 const rest = new REST({ version: "10" }).setToken(TOKEN);
 
-// 🔥 CLEAN + FORCE SYNC (THIS FIXES DUPLICATES)
+// 🔥 FIXED COMMAND REGISTRATION (FORCE CLEAN SYNC)
 async function registerCommands() {
   try {
-    console.log("🧹 Clearing old slash commands...");
+    console.log("🔥 STARTING FULL COMMAND RESET");
 
+    console.log("Guild:", GUILD_ID);
+    console.log("Client:", CLIENT_ID);
+
+    console.log("COMMANDS BEING SENT:");
+    commands.forEach(c => console.log("-", c.name));
+
+    // WIPE OLD COMMANDS
     await rest.put(
       Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
       { body: [] }
     );
 
-    console.log("🚀 Registering fresh commands...");
+    console.log("🧹 Old commands wiped");
 
-    const result = await rest.put(
+    // small delay
+    await new Promise(res => setTimeout(res, 1500));
+
+    // RECREATE COMMANDS
+    const response = await rest.put(
       Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
       { body: commands }
     );
 
-    console.log("✅ Sync complete");
-    console.log("Commands registered:", result.map(c => c.name));
+    console.log("✅ NEW COMMANDS REGISTERED");
+    console.log("COUNT:", response.length);
+    console.log(response.map(c => c.name));
+
   } catch (err) {
-    console.log("❌ Command sync error:", err);
+    console.log("❌ ERROR:");
+    console.log(err);
   }
 }
 
@@ -114,7 +107,7 @@ client.once("ready", async () => {
   await registerCommands();
 });
 
-// HANDLER
+// COMMAND HANDLER
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
@@ -160,17 +153,13 @@ client.on("interactionCreate", async (interaction) => {
     if (cmd === "roster") {
       const team = interaction.options.getString("team");
 
-      db.all(
-        "SELECT player FROM players WHERE team = ?",
-        [team],
-        (err, rows) => {
-          if (err) return interaction.reply("❌ DB error");
+      db.all("SELECT player FROM players WHERE team = ?", [team], (err, rows) => {
+        if (err) return interaction.reply("❌ DB error");
 
-          const list = rows.map(r => r.player).join(", ") || "No players";
+        const list = rows.map(r => r.player).join(", ") || "No players";
 
-          interaction.reply(`📋 ${team} roster:\n${list}`);
-        }
-      );
+        interaction.reply(`📋 ${team} roster:\n${list}`);
+      });
     }
   } catch (err) {
     console.log(err);
@@ -181,5 +170,4 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-// LOGIN
 client.login(TOKEN);
