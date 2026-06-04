@@ -17,7 +17,11 @@ const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 
-console.log("🚀 SCW v2 Booting...");
+console.log("🚀 SCW FULL BOT STARTING...");
+
+if (!TOKEN || !CLIENT_ID || !GUILD_ID) {
+  console.log("⚠️ Missing env vars");
+}
 
 /* ---------------- CLIENT ---------------- */
 
@@ -58,19 +62,19 @@ db.serialize(() => {
 
 /* ---------------- SAFE REPLY ---------------- */
 
-async function safe(interaction, msg) {
+async function safeReply(interaction, msg) {
   try {
-    if (!interaction.deferred) {
-      await interaction.reply({ content: msg, ephemeral: true });
-    } else {
+    if (interaction.deferred || interaction.replied) {
       await interaction.editReply(msg);
+    } else {
+      await interaction.reply({ content: msg, ephemeral: true });
     }
   } catch (err) {
     console.log("Reply error:", err.message);
   }
 }
 
-/* ---------------- HELPERS ---------------- */
+/* ---------------- STAFF CHECK ---------------- */
 
 function isStaff(member, setup) {
   if (!setup) return false;
@@ -86,7 +90,7 @@ function isStaff(member, setup) {
 const commands = [
   new SlashCommandBuilder()
     .setName("setup")
-    .setDescription("Setup SCW roles manually")
+    .setDescription("Setup SCW system")
     .addStringOption(o => o.setName("owner").setRequired(true))
     .addStringOption(o => o.setName("admin").setRequired(true))
     .addStringOption(o => o.setName("mod").setRequired(true))
@@ -94,18 +98,23 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("addteam")
-    .setDescription("Create team")
+    .setDescription("Create a team")
     .addStringOption(o => o.setName("name").setRequired(true)),
 
   new SlashCommandBuilder()
     .setName("sign")
-    .setDescription("Sign player")
+    .setDescription("Sign player (10 max roster)")
     .addUserOption(o => o.setName("user").setRequired(true))
     .addStringOption(o => o.setName("team").setRequired(true)),
 
   new SlashCommandBuilder()
     .setName("release")
     .setDescription("Release player")
+    .addUserOption(o => o.setName("user").setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName("strike")
+    .setDescription("Give strike")
     .addUserOption(o => o.setName("user").setRequired(true)),
 
   new SlashCommandBuilder()
@@ -120,14 +129,14 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("standings")
-    .setDescription("Leaderboard"),
+    .setDescription("Show leaderboard"),
 ];
 
-/* ---------------- REGISTER ---------------- */
+/* ---------------- REGISTER COMMANDS ---------------- */
 
 async function register() {
   try {
-    if (!TOKEN) return console.log("❌ Missing token");
+    if (!TOKEN) return;
 
     const rest = new REST({ version: "10" }).setToken(TOKEN);
 
@@ -136,7 +145,7 @@ async function register() {
       { body: commands }
     );
 
-    console.log("✅ Commands loaded");
+    console.log("✅ Commands registered");
   } catch (err) {
     console.log("Register error:", err.message);
   }
@@ -145,10 +154,10 @@ async function register() {
 /* ---------------- READY ---------------- */
 
 client.once("ready", () => {
-  console.log(`🤖 Online: ${client.user.tag}`);
+  console.log(`🤖 ONLINE: ${client.user.tag}`);
 });
 
-/* ---------------- COMMAND HANDLER (CLEAN FLOW) ---------------- */
+/* ---------------- COMMAND HANDLER ---------------- */
 
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
@@ -164,7 +173,7 @@ client.on("interactionCreate", async (interaction) => {
       /* ---------------- SETUP ---------------- */
       if (commandName === "setup") {
         if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-          return safe(interaction, "No permission");
+          return safeReply(interaction, "No permission");
 
         db.run(
           `INSERT OR REPLACE INTO setup VALUES (?, ?, ?, ?, ?)`,
@@ -177,13 +186,13 @@ client.on("interactionCreate", async (interaction) => {
           ]
         );
 
-        return safe(interaction, "⚙️ Setup saved");
+        return safeReply(interaction, "⚙️ Setup complete");
       }
 
       /* ---------------- ADD TEAM ---------------- */
       if (commandName === "addteam") {
         if (!isStaff(member, setup))
-          return safe(interaction, "No permission");
+          return safeReply(interaction, "No permission");
 
         const name = interaction.options.getString("name");
 
@@ -194,13 +203,13 @@ client.on("interactionCreate", async (interaction) => {
           [guild.id, name, role.id]
         );
 
-        return safe(interaction, `🏀 Team created: ${name}`);
+        return safeReply(interaction, `🏀 Team created: ${name}`);
       }
 
       /* ---------------- SIGN (10 LIMIT) ---------------- */
       if (commandName === "sign") {
         if (!isStaff(member, setup))
-          return safe(interaction, "No permission");
+          return safeReply(interaction, "No permission");
 
         const user = interaction.options.getUser("user");
         const teamName = interaction.options.getString("team");
@@ -209,14 +218,16 @@ client.on("interactionCreate", async (interaction) => {
           `SELECT * FROM teams WHERE guildId = ? AND name = ?`,
           [guild.id, teamName],
           async (err, team) => {
-            if (!team) return safe(interaction, "Team not found");
+
+            if (!team) return safeReply(interaction, "Team not found");
 
             db.all(
               `SELECT * FROM players WHERE teamId = ?`,
               [team.id],
               async (err, players) => {
+
                 if (players.length >= 10)
-                  return safe(interaction, "Roster full (10/10)");
+                  return safeReply(interaction, "❌ Roster full (10/10)");
 
                 const m = await guild.members.fetch(user.id);
 
@@ -227,7 +238,10 @@ client.on("interactionCreate", async (interaction) => {
 
                 m.roles.add(team.roleId).catch(() => {});
 
-                return safe(interaction, `✅ ${user.username} signed`);
+                return safeReply(
+                  interaction,
+                  `✅ ${user.username} signed to ${team.name}`
+                );
               }
             );
           }
@@ -237,7 +251,7 @@ client.on("interactionCreate", async (interaction) => {
       /* ---------------- RELEASE ---------------- */
       if (commandName === "release") {
         if (!isStaff(member, setup))
-          return safe(interaction, "No permission");
+          return safeReply(interaction, "No permission");
 
         const user = interaction.options.getUser("user");
         const m = await guild.members.fetch(user.id);
@@ -246,44 +260,69 @@ client.on("interactionCreate", async (interaction) => {
           `SELECT * FROM players WHERE userId = ?`,
           [user.id],
           (err, row) => {
-            if (!row) return safe(interaction, "Not found");
+
+            if (!row) return safeReply(interaction, "Not found");
 
             db.get(
               `SELECT roleId FROM teams WHERE id = ?`,
               [row.teamId],
               (err, team) => {
+
                 if (team?.roleId)
                   m.roles.remove(team.roleId).catch(() => {});
 
-                db.run(
-                  `DELETE FROM players WHERE userId = ?`,
-                  [user.id]
-                );
+                db.run(`DELETE FROM players WHERE userId = ?`, [user.id]);
 
-                return safe(interaction, "📤 Released");
+                return safeReply(interaction, `📤 Released ${user.username}`);
               }
             );
           }
         );
       }
 
-      /* ---------------- WIN / LOSS ---------------- */
-      if (commandName === "win") {
+      /* ---------------- STRIKE ---------------- */
+      if (commandName === "strike") {
+        if (!isStaff(member, setup))
+          return safeReply(interaction, "No permission");
+
+        const user = interaction.options.getUser("user");
+
         db.run(
-          `UPDATE teams SET wins = wins + 1 WHERE name = ?`,
-          [interaction.options.getString("team")]
+          `UPDATE players SET strikes = strikes + 1 WHERE userId = ?`,
+          [user.id]
         );
 
-        return safe(interaction, "🏆 Win added");
+        return safeReply(interaction, "⚠️ Strike added");
       }
 
-      if (commandName === "loss") {
+      /* ---------------- WIN ---------------- */
+      if (commandName === "win") {
+        if (!isStaff(member, setup))
+          return safeReply(interaction, "No permission");
+
+        const team = interaction.options.getString("team");
+
         db.run(
-          `UPDATE teams SET losses = losses + 1 WHERE name = ?`,
-          [interaction.options.getString("team")]
+          `UPDATE teams SET wins = wins + 1 WHERE name = ?`,
+          [team]
         );
 
-        return safe(interaction, "📉 Loss added");
+        return safeReply(interaction, `🏆 Win added to ${team}`);
+      }
+
+      /* ---------------- LOSS ---------------- */
+      if (commandName === "loss") {
+        if (!isStaff(member, setup))
+          return safeReply(interaction, "No permission");
+
+        const team = interaction.options.getString("team");
+
+        db.run(
+          `UPDATE teams SET losses = losses + 1 WHERE name = ?`,
+          [team]
+        );
+
+        return safeReply(interaction, `📉 Loss added to ${team}`);
       }
 
       /* ---------------- STANDINGS ---------------- */
@@ -292,8 +331,9 @@ client.on("interactionCreate", async (interaction) => {
           `SELECT * FROM teams WHERE guildId = ? ORDER BY wins DESC`,
           [guild.id],
           (err, rows) => {
+
             if (!rows?.length)
-              return safe(interaction, "No teams");
+              return safeReply(interaction, "No teams yet");
 
             let msg = "🏆 SCW STANDINGS\n\n";
 
@@ -301,14 +341,14 @@ client.on("interactionCreate", async (interaction) => {
               msg += `#${i + 1} ${t.name} - ${t.wins}W/${t.losses}L\n`;
             });
 
-            safe(interaction, msg);
+            safeReply(interaction, msg);
           }
         );
       }
 
     } catch (err) {
-      console.log("Command crash:", err.message);
-      return safe(interaction, "❌ Error occurred");
+      console.log("Crash:", err.message);
+      return safeReply(interaction, "❌ Error occurred");
     }
 
   });
