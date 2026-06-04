@@ -17,7 +17,7 @@ const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 
-console.log("🚀 SCW FULL BOT STARTING...");
+console.log("🚀 SCW v3 FULL BOT STARTING...");
 
 if (!TOKEN || !CLIENT_ID || !GUILD_ID) {
   console.log("⚠️ Missing env vars");
@@ -34,12 +34,15 @@ const client = new Client({
 const db = new sqlite3.Database("./scw.db");
 
 db.serialize(() => {
-  db.run(`CREATE TABLE IF NOT EXISTS setup (
+  db.run(`CREATE TABLE IF NOT EXISTS config (
     guildId TEXT PRIMARY KEY,
     ownerRole TEXT,
+    captainRole TEXT,
     adminRole TEXT,
     modRole TEXT,
-    freeAgentRole TEXT
+    freeAgentRole TEXT,
+    scoreChannel TEXT,
+    strikeChannel TEXT
   )`);
 
   db.run(`CREATE TABLE IF NOT EXISTS teams (
@@ -62,7 +65,7 @@ db.serialize(() => {
 
 /* ---------------- SAFE REPLY ---------------- */
 
-async function safeReply(interaction, msg) {
+async function safe(interaction, msg) {
   try {
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply(msg);
@@ -74,14 +77,16 @@ async function safeReply(interaction, msg) {
   }
 }
 
-/* ---------------- STAFF CHECK ---------------- */
+/* ---------------- PERMISSION CHECK ---------------- */
 
-function isStaff(member, setup) {
-  if (!setup) return false;
+function hasPerm(member, config) {
+  if (!config) return false;
+
   return (
-    member.roles.cache.has(setup.ownerRole) ||
-    member.roles.cache.has(setup.adminRole) ||
-    member.roles.cache.has(setup.modRole)
+    member.roles.cache.has(config.ownerRole) ||
+    member.roles.cache.has(config.captainRole) ||
+    member.roles.cache.has(config.adminRole) ||
+    member.roles.cache.has(config.modRole)
   );
 }
 
@@ -90,20 +95,23 @@ function isStaff(member, setup) {
 const commands = [
   new SlashCommandBuilder()
     .setName("setup")
-    .setDescription("Setup SCW system")
-    .addStringOption(o => o.setName("owner").setRequired(true))
-    .addStringOption(o => o.setName("admin").setRequired(true))
-    .addStringOption(o => o.setName("mod").setRequired(true))
-    .addStringOption(o => o.setName("freeagent").setRequired(true)),
+    .setDescription("Full SCW setup")
+    .addStringOption(o => o.setName("ownerrole").setRequired(true))
+    .addStringOption(o => o.setName("captainrole").setRequired(true))
+    .addStringOption(o => o.setName("adminrole").setRequired(true))
+    .addStringOption(o => o.setName("modrole").setRequired(true))
+    .addStringOption(o => o.setName("freeagentrole").setRequired(true))
+    .addChannelOption(o => o.setName("scorechannel").setRequired(true))
+    .addChannelOption(o => o.setName("strikechannel").setRequired(true)),
 
   new SlashCommandBuilder()
     .setName("addteam")
-    .setDescription("Create a team")
+    .setDescription("Create team")
     .addStringOption(o => o.setName("name").setRequired(true)),
 
   new SlashCommandBuilder()
     .setName("sign")
-    .setDescription("Sign player (10 max roster)")
+    .setDescription("Sign player (10 max)")
     .addUserOption(o => o.setName("user").setRequired(true))
     .addStringOption(o => o.setName("team").setRequired(true)),
 
@@ -114,7 +122,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("strike")
-    .setDescription("Give strike")
+    .setDescription("Add strike")
     .addUserOption(o => o.setName("user").setRequired(true)),
 
   new SlashCommandBuilder()
@@ -129,15 +137,13 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("standings")
-    .setDescription("Show leaderboard"),
+    .setDescription("Leaderboard"),
 ];
 
-/* ---------------- REGISTER COMMANDS ---------------- */
+/* ---------------- REGISTER ---------------- */
 
 async function register() {
   try {
-    if (!TOKEN) return;
-
     const rest = new REST({ version: "10" }).setToken(TOKEN);
 
     await rest.put(
@@ -166,33 +172,36 @@ client.on("interactionCreate", async (interaction) => {
 
   const { commandName, guild, member } = interaction;
 
-  db.get(`SELECT * FROM setup WHERE guildId = ?`, [guild.id], async (err, setup) => {
+  db.get(`SELECT * FROM config WHERE guildId = ?`, [guild.id], async (err, config) => {
 
     try {
 
       /* ---------------- SETUP ---------------- */
       if (commandName === "setup") {
         if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-          return safeReply(interaction, "No permission");
+          return safe(interaction, "No permission");
 
         db.run(
-          `INSERT OR REPLACE INTO setup VALUES (?, ?, ?, ?, ?)`,
+          `INSERT OR REPLACE INTO config VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             guild.id,
-            interaction.options.getString("owner"),
-            interaction.options.getString("admin"),
-            interaction.options.getString("mod"),
-            interaction.options.getString("freeagent"),
+            interaction.options.getString("ownerrole"),
+            interaction.options.getString("captainrole"),
+            interaction.options.getString("adminrole"),
+            interaction.options.getString("modrole"),
+            interaction.options.getString("freeagentrole"),
+            interaction.options.getChannel("scorechannel").id,
+            interaction.options.getChannel("strikechannel").id
           ]
         );
 
-        return safeReply(interaction, "⚙️ Setup complete");
+        return safe(interaction, "⚙️ SCW FULL SETUP COMPLETE");
       }
 
       /* ---------------- ADD TEAM ---------------- */
       if (commandName === "addteam") {
-        if (!isStaff(member, setup))
-          return safeReply(interaction, "No permission");
+        if (!hasPerm(member, config))
+          return safe(interaction, "No permission");
 
         const name = interaction.options.getString("name");
 
@@ -203,13 +212,13 @@ client.on("interactionCreate", async (interaction) => {
           [guild.id, name, role.id]
         );
 
-        return safeReply(interaction, `🏀 Team created: ${name}`);
+        return safe(interaction, `🏀 Team created: ${name}`);
       }
 
-      /* ---------------- SIGN (10 LIMIT) ---------------- */
+      /* ---------------- SIGN ---------------- */
       if (commandName === "sign") {
-        if (!isStaff(member, setup))
-          return safeReply(interaction, "No permission");
+        if (!hasPerm(member, config))
+          return safe(interaction, "No permission");
 
         const user = interaction.options.getUser("user");
         const teamName = interaction.options.getString("team");
@@ -219,7 +228,7 @@ client.on("interactionCreate", async (interaction) => {
           [guild.id, teamName],
           async (err, team) => {
 
-            if (!team) return safeReply(interaction, "Team not found");
+            if (!team) return safe(interaction, "Team not found");
 
             db.all(
               `SELECT * FROM players WHERE teamId = ?`,
@@ -227,7 +236,7 @@ client.on("interactionCreate", async (interaction) => {
               async (err, players) => {
 
                 if (players.length >= 10)
-                  return safeReply(interaction, "❌ Roster full (10/10)");
+                  return safe(interaction, "❌ Roster full");
 
                 const m = await guild.members.fetch(user.id);
 
@@ -238,10 +247,7 @@ client.on("interactionCreate", async (interaction) => {
 
                 m.roles.add(team.roleId).catch(() => {});
 
-                return safeReply(
-                  interaction,
-                  `✅ ${user.username} signed to ${team.name}`
-                );
+                return safe(interaction, `✅ ${user.username} signed`);
               }
             );
           }
@@ -250,79 +256,60 @@ client.on("interactionCreate", async (interaction) => {
 
       /* ---------------- RELEASE ---------------- */
       if (commandName === "release") {
-        if (!isStaff(member, setup))
-          return safeReply(interaction, "No permission");
+        if (!hasPerm(member, config))
+          return safe(interaction, "No permission");
 
         const user = interaction.options.getUser("user");
         const m = await guild.members.fetch(user.id);
 
-        db.get(
-          `SELECT * FROM players WHERE userId = ?`,
-          [user.id],
-          (err, row) => {
+        db.get(`SELECT * FROM players WHERE userId = ?`, [user.id], (err, row) => {
+          if (!row) return safe(interaction, "Not found");
 
-            if (!row) return safeReply(interaction, "Not found");
+          db.get(`SELECT roleId FROM teams WHERE id = ?`, [row.teamId], (err, team) => {
+            if (team?.roleId) m.roles.remove(team.roleId).catch(() => {});
 
-            db.get(
-              `SELECT roleId FROM teams WHERE id = ?`,
-              [row.teamId],
-              (err, team) => {
+            db.run(`DELETE FROM players WHERE userId = ?`, [user.id]);
 
-                if (team?.roleId)
-                  m.roles.remove(team.roleId).catch(() => {});
-
-                db.run(`DELETE FROM players WHERE userId = ?`, [user.id]);
-
-                return safeReply(interaction, `📤 Released ${user.username}`);
-              }
-            );
-          }
-        );
+            return safe(interaction, "📤 Released");
+          });
+        });
       }
 
       /* ---------------- STRIKE ---------------- */
       if (commandName === "strike") {
-        if (!isStaff(member, setup))
-          return safeReply(interaction, "No permission");
-
         const user = interaction.options.getUser("user");
 
-        db.run(
-          `UPDATE players SET strikes = strikes + 1 WHERE userId = ?`,
-          [user.id]
-        );
+        db.run(`UPDATE players SET strikes = strikes + 1 WHERE userId = ?`, [user.id]);
 
-        return safeReply(interaction, "⚠️ Strike added");
+        if (config?.strikeChannel) {
+          const ch = guild.channels.cache.get(config.strikeChannel);
+          if (ch) ch.send(`⚠️ Strike: <@${user.id}>`);
+        }
+
+        return safe(interaction, "⚠️ Strike added");
       }
 
       /* ---------------- WIN ---------------- */
       if (commandName === "win") {
-        if (!isStaff(member, setup))
-          return safeReply(interaction, "No permission");
-
         const team = interaction.options.getString("team");
 
-        db.run(
-          `UPDATE teams SET wins = wins + 1 WHERE name = ?`,
-          [team]
-        );
+        db.run(`UPDATE teams SET wins = wins + 1 WHERE name = ?`, [team]);
 
-        return safeReply(interaction, `🏆 Win added to ${team}`);
+        if (config?.scoreChannel) {
+          const ch = guild.channels.cache.get(config.scoreChannel);
+          if (ch) ch.send(`📊 ${team} got a WIN`);
+        }
+
+        return safe(interaction, "🏆 Win added");
       }
 
       /* ---------------- LOSS ---------------- */
       if (commandName === "loss") {
-        if (!isStaff(member, setup))
-          return safeReply(interaction, "No permission");
-
         const team = interaction.options.getString("team");
 
-        db.run(
-          `UPDATE teams SET losses = losses + 1 WHERE name = ?`,
-          [team]
-        );
+        db.run(`UPDATE teams SET losses = losses + 1 WHERE name = ?`, [team]);
 
-        return safeReply(interaction, `📉 Loss added to ${team}`);
+        return safe(interaction, "📉 Loss added");
       }
 
       /* ---------------- STANDINGS ---------------- */
@@ -333,7 +320,7 @@ client.on("interactionCreate", async (interaction) => {
           (err, rows) => {
 
             if (!rows?.length)
-              return safeReply(interaction, "No teams yet");
+              return safe(interaction, "No teams");
 
             let msg = "🏆 SCW STANDINGS\n\n";
 
@@ -341,14 +328,14 @@ client.on("interactionCreate", async (interaction) => {
               msg += `#${i + 1} ${t.name} - ${t.wins}W/${t.losses}L\n`;
             });
 
-            safeReply(interaction, msg);
+            safe(interaction, msg);
           }
         );
       }
 
     } catch (err) {
       console.log("Crash:", err.message);
-      return safeReply(interaction, "❌ Error occurred");
+      return safe(interaction, "❌ Error occurred");
     }
 
   });
@@ -358,8 +345,5 @@ client.on("interactionCreate", async (interaction) => {
 
 (async () => {
   await register();
-
-  if (!TOKEN) return console.log("No token");
-
   client.login(TOKEN);
 })();
