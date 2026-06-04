@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, REST, Routes } = require("discord.js");
+const { Client, GatewayIntentBits } = require("discord.js");
 const sqlite3 = require("sqlite3").verbose();
 
 const client = new Client({
@@ -8,41 +8,17 @@ const client = new Client({
 // ================= DATABASE =================
 const db = new sqlite3.Database("./scw.db");
 
-db.run(`
-CREATE TABLE IF NOT EXISTS role_permissions (
-  role_id TEXT PRIMARY KEY,
-  role_type TEXT
-);
-`);
+// your tables here
+db.run(`CREATE TABLE IF NOT EXISTS role_permissions (role_id TEXT PRIMARY KEY, role_type TEXT)`);
+db.run(`CREATE TABLE IF NOT EXISTS transactions_lock (id INTEGER PRIMARY KEY, locked INTEGER DEFAULT 0)`);
+db.run(`INSERT OR IGNORE INTO transactions_lock (id, locked) VALUES (1, 0)`);
 
-db.run(`
-CREATE TABLE IF NOT EXISTS transactions_lock (
-  id INTEGER PRIMARY KEY,
-  locked INTEGER DEFAULT 0
-);
-`);
-
-db.run(`
-INSERT OR IGNORE INTO transactions_lock (id, locked) VALUES (1, 0)
-`);
-
-// ================= ANTI ABUSE =================
-const cooldowns = new Map();
-
-function isOnCooldown(userId, cmd, ms = 2000) {
-  const key = `${userId}-${cmd}`;
-  const now = Date.now();
-
-  if (cooldowns.has(key)) {
-    const expire = cooldowns.get(key);
-    if (now < expire) return true;
-  }
-
-  cooldowns.set(key, now + ms);
+// ================= FUNCTIONS =================
+function isOnCooldown(userId, cmd) {
+  // (keep your cooldown system here)
   return false;
 }
 
-// ================= PERMISSION SYSTEM =================
 async function getUserPermission(interaction) {
   const roles = interaction.member.roles.cache.map(r => r.id);
 
@@ -65,110 +41,42 @@ async function getUserPermission(interaction) {
   });
 }
 
-// ================= COMMANDS =================
-const commands = [
-  {
-    name: "add-admin-role",
-    description: "Add admin role",
-    options: [{ name: "role", description: "Role", type: 8, required: true }]
-  },
-  {
-    name: "add-mod-role",
-    description: "Add mod role",
-    options: [{ name: "role", description: "Role", type: 8, required: true }]
-  },
-  {
-    name: "setup",
-    description: "Initialize SCW system"
-  },
-  {
-    name: "addteam",
-    description: "Create team",
-    options: [{ name: "name", description: "Team name", type: 3, required: true }]
-  },
-  {
-    name: "sign-player",
-    description: "Sign a player",
-    options: [
-      { name: "user", description: "Player", type: 6, required: true },
-      { name: "team", description: "Team name", type: 3, required: true }
-    ]
-  },
-  {
-    name: "release-player",
-    description: "Release player",
-    options: [{ name: "user", description: "Player", type: 6, required: true }]
-  },
-  {
-    name: "strike",
-    description: "Give strike",
-    options: [{ name: "user", description: "Player", type: 6, required: true }]
-  },
-  {
-    name: "warn",
-    description: "Warn player",
-    options: [{ name: "user", description: "Player", type: 6, required: true }]
-  },
-  {
-    name: "ban",
-    description: "Ban player",
-    options: [{ name: "user", description: "Player", type: 6, required: true }]
-  },
-  {
-    name: "kick",
-    description: "Kick player",
-    options: [{ name: "user", description: "Player", type: 6, required: true }]
-  },
-  {
-    name: "mute",
-    description: "Mute player",
-    options: [{ name: "user", description: "Player", type: 6, required: true }]
-  },
-  {
-    name: "transactions-lock",
-    description: "Lock transactions"
-  },
-  {
-    name: "transactions-unlock",
-    description: "Unlock transactions"
-  }
-];
+// ================= IMPORTANT SECTION =================
+// 🔥 THIS IS WHERE YOUR COMMAND CODE GOES
 
-// ================= REGISTER COMMANDS =================
-const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
-
-async function registerCommands() {
-  await rest.put(
-    Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
-    { body: commands }
-  );
-
-  console.log("✅ Commands registered");
-}
-
-// ================= READY =================
-client.once("ready", async () => {
-  console.log(`Logged in as ${client.user.tag}`);
-  await registerCommands();
-});
-
-// ================= HANDLER =================
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   const cmd = interaction.commandName;
-  const userId = interaction.user.id;
 
-  if (isOnCooldown(userId, cmd)) {
-    return interaction.reply({ content: "⏳ Slow down.", ephemeral: true });
-  }
+  const safeReply = async (text) => {
+    if (interaction.replied || interaction.deferred) {
+      return interaction.followUp({ content: text, ephemeral: true });
+    }
+    return interaction.reply({ content: text, ephemeral: true });
+  };
 
   const perm = await getUserPermission(interaction);
 
-  // ================= ADMIN ROLE =================
+  // ================= EXAMPLE COMMANDS =================
+
+  if (cmd === "setup") {
+    db.run(`CREATE TABLE IF NOT EXISTS teams (id INTEGER PRIMARY KEY, name TEXT)`);
+    db.run(`CREATE TABLE IF NOT EXISTS players (user_id TEXT, team TEXT)`);
+    db.run(`CREATE TABLE IF NOT EXISTS logs (action TEXT, user_id TEXT, time INTEGER)`);
+
+    return safeReply("📘 SCW system fully initialized");
+  }
+
+  if (cmd === "addteam") {
+    const name = interaction.options.getString("name");
+    db.run(`INSERT INTO teams (name) VALUES (?)`, [name]);
+
+    return safeReply(`🏀 Team created: ${name}`);
+  }
+
   if (cmd === "add-admin-role") {
-    if (perm < 3)
-      return interaction.reply({ content: "❌ No permission", ephemeral: true });
+    if (perm < 3) return safeReply("❌ No permission");
 
     const role = interaction.options.getRole("role");
 
@@ -177,13 +85,11 @@ client.on("interactionCreate", async (interaction) => {
       [role.id, "admin"]
     );
 
-    return interaction.reply({ content: `✅ Admin role set: ${role.name}` });
+    return safeReply(`✅ Admin role added: ${role.name}`);
   }
 
-  // ================= MOD ROLE =================
   if (cmd === "add-mod-role") {
-    if (perm < 3)
-      return interaction.reply({ content: "❌ No permission", ephemeral: true });
+    if (perm < 3) return safeReply("❌ No permission");
 
     const role = interaction.options.getRole("role");
 
@@ -192,51 +98,10 @@ client.on("interactionCreate", async (interaction) => {
       [role.id, "mod"]
     );
 
-    return interaction.reply({ content: `✅ Mod role set: ${role.name}` });
+    return safeReply(`✅ Mod role added: ${role.name}`);
   }
 
-  // ================= TRANSACTIONS =================
-  if (cmd === "transactions-lock") {
-    if (perm < 2)
-      return interaction.reply({ content: "❌ No permission", ephemeral: true });
-
-    db.run(`UPDATE transactions_lock SET locked = 1 WHERE id = 1`);
-    return interaction.reply("🔒 Transactions locked");
-  }
-
-  if (cmd === "transactions-unlock") {
-    if (perm < 2)
-      return interaction.reply({ content: "❌ No permission", ephemeral: true });
-
-    db.run(`UPDATE transactions_lock SET locked = 0 WHERE id = 1`);
-    return interaction.reply("🔓 Transactions unlocked");
-  }
-
-  // ================= TEAM SYSTEM =================
-  if (cmd === "addteam") {
-    return interaction.reply(`🏀 Team created: ${interaction.options.getString("name")}`);
-  }
-
-  if (cmd === "setup") {
-    return interaction.reply("📘 SCW system initialized");
-  }
-
-  if (cmd === "sign-player") {
-    return interaction.reply("✅ Player signed");
-  }
-
-  if (cmd === "release-player") {
-    return interaction.reply("📤 Player released");
-  }
-
-  // ================= MOD ACTIONS =================
-  if (["strike", "warn", "ban", "kick", "mute"].includes(cmd)) {
-    if (perm < 1)
-      return interaction.reply({ content: "❌ No permission", ephemeral: true });
-
-    const user = interaction.options.getUser("user");
-    return interaction.reply(`⚠️ ${cmd} applied to ${user.username}`);
-  }
+  return safeReply("❌ Unknown command");
 });
 
 // ================= LOGIN =================
