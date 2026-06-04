@@ -60,7 +60,7 @@ client.once("ready", () => {
 });
 
 // =====================
-// COMMAND HANDLER
+// COMMAND SYSTEM
 // =====================
 client.on("interactionCreate", async (interaction) => {
   try {
@@ -70,96 +70,32 @@ client.on("interactionCreate", async (interaction) => {
 
     console.log("CMD:", cmd);
 
-    // =====================
+    // -----------------
     // HELP
-    // =====================
+    // -----------------
     if (cmd === "help") {
-      return interaction.reply("📘 SCW v2 System Online (Database + Locks Enabled)");
+      return interaction.reply("📘 SCW v2 System Online");
     }
 
-    // =====================
-    // SETUP LOCK SYSTEM
-    // =====================
-    if (cmd === "setup") {
-      setSetting("transaction_lock", "off");
-      return interaction.reply("⚙️ SCW v2 Setup Complete (Locks OFF)");
-    }
-
-    // =====================
-    // TRANSACTION LOCK (NEW)
-    // =====================
-    if (cmd === "transactions") {
-      const action = interaction.options.getString("action"); // lock/unlock
-
-      if (action === "lock") {
-        setSetting("transaction_lock", "on");
-        return interaction.reply("🔒 Transactions LOCKED");
-      }
-
-      if (action === "unlock") {
-        setSetting("transaction_lock", "off");
-        return interaction.reply("🔓 Transactions UNLOCKED");
-      }
-
-      return interaction.reply("❓ Use lock or unlock");
-    }
-
-    // =====================
+    // -----------------
     // ADD TEAM
-    // =====================
+    // -----------------
     if (cmd === "addteam") {
-      const name = interaction.options.getString("name");
+      const name = interaction.options.getString("name") || "Team1";
 
       db.run(`INSERT OR IGNORE INTO teams(name) VALUES (?)`, [name]);
 
-      return interaction.reply(`➕ Team **${name}** added.`);
+      return interaction.reply(`➕ Team added: ${name}`);
     }
 
-    // =====================
-    // SIGN PLAYER (LOCK CHECK)
-    // =====================
-    if (cmd === "sign-player") {
-      const player = interaction.options.getString("player");
-      const team = interaction.options.getString("team");
-
-      getSetting("transaction_lock", (lock) => {
-        if (lock === "on") {
-          return interaction.reply("🔒 Transactions are locked");
-        }
-
-        db.run(`INSERT INTO roster(player, team) VALUES (?, ?)`, [player, team]);
-        return interaction.reply(`📝 ${player} signed to **${team}**`);
-      });
-
-      return;
-    }
-
-    // =====================
-    // RELEASE PLAYER (LOCK CHECK)
-    // =====================
-    if (cmd === "release-player") {
-      const player = interaction.options.getString("player");
-
-      getSetting("transaction_lock", (lock) => {
-        if (lock === "on") {
-          return interaction.reply("🔒 Transactions are locked");
-        }
-
-        db.run(`DELETE FROM roster WHERE player = ?`, [player]);
-        return interaction.reply(`📤 ${player} released`);
-      });
-
-      return;
-    }
-
-    // =====================
+    // -----------------
     // ROSTER
-    // =====================
+    // -----------------
     if (cmd === "roster") {
       db.all(`SELECT * FROM roster`, [], (err, rows) => {
-        if (err) return interaction.reply("❌ Error");
+        if (err) return interaction.reply("❌ Error loading roster");
 
-        if (!rows.length) return interaction.reply("📋 Empty roster");
+        if (!rows.length) return interaction.reply("📋 No players found");
 
         const list = rows.map(r => `👤 ${r.player} → ${r.team}`).join("\n");
 
@@ -169,23 +105,48 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    // =====================
-    // WARN SYSTEM
-    // =====================
-    if (cmd === "warn") {
+    // -----------------
+    // SIGN PLAYER
+    // -----------------
+    if (cmd === "sign-player") {
+      const player = interaction.options.getString("player") || "Player1";
+      const team = interaction.options.getString("team") || "Free Agents";
+
+      db.run(`INSERT INTO roster(player, team) VALUES (?, ?)`, [player, team]);
+
+      return interaction.reply(`📝 ${player} signed to ${team}`);
+    }
+
+    // -----------------
+    // RELEASE PLAYER
+    // -----------------
+    if (cmd === "release-player") {
       const player = interaction.options.getString("player");
-      const reason = interaction.options.getString("reason");
+
+      if (!player) return interaction.reply("❌ Provide player name");
+
+      db.run(`DELETE FROM roster WHERE player = ?`, [player]);
+
+      return interaction.reply(`📤 ${player} released`);
+    }
+
+    // -----------------
+    // WARN SYSTEM
+    // -----------------
+    if (cmd === "warn") {
+      const player = interaction.options.getString("player") || "Player";
+      const reason = interaction.options.getString("reason") || "No reason";
 
       db.run(`INSERT INTO warns(player, reason) VALUES (?, ?)`, [player, reason]);
 
-      return interaction.reply(`⚠️ ${player} warned`);
+      return interaction.reply(`⚠️ ${player} warned: ${reason}`);
     }
 
-    // =====================
+    // -----------------
     // STRIKE SYSTEM
-    // =====================
+    // -----------------
     if (cmd === "strike") {
-      const player = interaction.options.getString("player");
+      const player = interaction.options.getString("player") || "Player";
 
       db.get(`SELECT count FROM strikes WHERE player = ?`, [player], (err, row) => {
         let count = row ? row.count + 1 : 1;
@@ -202,18 +163,37 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    // =====================
+    // -----------------
+    // TRANSACTIONS LOCK
+    // -----------------
+    if (cmd === "transactions") {
+      const action = interaction.options.getString("action");
+
+      if (!action) return interaction.reply("❌ Use: lock or unlock");
+
+      if (action === "lock") {
+        setSetting("transaction_lock", "on");
+        return interaction.reply("🔒 Transactions LOCKED");
+      }
+
+      if (action === "unlock") {
+        setSetting("transaction_lock", "off");
+        return interaction.reply("🔓 Transactions UNLOCKED");
+      }
+
+      return interaction.reply("❓ Invalid action");
+    }
+
+    // -----------------
     // DEFAULT
-    // =====================
-    return interaction.reply({
-      content: `❓ Unknown command: /${cmd}`,
-      ephemeral: true
-    });
+    // -----------------
+    return interaction.reply(`❓ Unknown command: /${cmd}`);
 
   } catch (err) {
     console.error(err);
-    return interaction.reply("❌ SCW v2 error");
+    return interaction.reply("❌ SCW error occurred");
   }
 });
 
+// =====================
 client.login(process.env.DISCORD_TOKEN);
