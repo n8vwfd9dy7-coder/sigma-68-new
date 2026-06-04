@@ -5,9 +5,10 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
+// ENV VARIABLES
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
-const GUILD_ID = process.env.GUILD_ID; // 🔥 IMPORTANT (add this in Railway)
+const GUILD_ID = process.env.GUILD_ID;
 
 // DATABASE
 const db = new sqlite3.Database("./scw.db");
@@ -17,7 +18,7 @@ db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS players (player TEXT, team TEXT)`);
 });
 
-// ALL COMMANDS
+// COMMANDS
 const commands = [
   { name: "help", description: "SCW help menu" },
   { name: "setup", description: "Setup SCW system" },
@@ -39,8 +40,18 @@ const commands = [
     name: "sign-player",
     description: "Sign player",
     options: [
-      { name: "player", type: 3, required: true, description: "Player name" },
-      { name: "team", type: 3, required: true, description: "Team name" },
+      {
+        name: "player",
+        type: 3,
+        required: true,
+        description: "Player name",
+      },
+      {
+        name: "team",
+        type: 3,
+        required: true,
+        description: "Team name",
+      },
     ],
   },
 
@@ -48,7 +59,11 @@ const commands = [
     name: "release-player",
     description: "Release player",
     options: [
-      { name: "player", type: 3, required: true },
+      {
+        name: "player",
+        type: 3,
+        required: true,
+      },
     ],
   },
 
@@ -56,31 +71,40 @@ const commands = [
     name: "roster",
     description: "Show team roster",
     options: [
-      { name: "team", type: 3, required: true },
+      {
+        name: "team",
+        type: 3,
+        required: true,
+      },
     ],
   },
 ];
 
-// DEBUG
-console.log("SCW BOT STARTING...");
-console.log("Commands:", commands.map(c => c.name));
-
 // REST
 const rest = new REST({ version: "10" }).setToken(TOKEN);
 
-// 🔥 FORCE GUILD COMMAND SYNC (FIXES YOUR ISSUE)
+// 🔥 FORCE REGISTER ALL COMMANDS (FIX)
 async function registerCommands() {
   try {
-    console.log("Registering GUILD slash commands...");
+    console.log("=== SCW COMMAND REGISTRATION START ===");
 
-    await rest.put(
+    console.log("Guild ID:", GUILD_ID);
+    console.log("Client ID:", CLIENT_ID);
+
+    const names = commands.map(c => c.name);
+    console.log("Commands sending:", names);
+
+    const result = await rest.put(
       Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
       { body: commands }
     );
 
-    console.log("✅ Commands fully synced to guild");
+    console.log("=== REGISTRATION COMPLETE ===");
+    console.log("Discord returned:", result.length, "commands");
+    console.log(result.map(c => c.name));
   } catch (err) {
-    console.log("❌ Register error:", err);
+    console.log("❌ ERROR REGISTERING COMMANDS:");
+    console.log(err);
   }
 }
 
@@ -92,7 +116,7 @@ client.once("ready", async () => {
   await registerCommands();
 });
 
-// HANDLER
+// INTERACTION HANDLER
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
@@ -104,7 +128,7 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (cmd === "setup") {
-      return interaction.reply("✅ System ready (Guild mode active)");
+      return interaction.reply("✅ SCW system is running");
     }
 
     if (cmd === "addteam") {
@@ -138,19 +162,23 @@ client.on("interactionCreate", async (interaction) => {
     if (cmd === "roster") {
       const team = interaction.options.getString("team");
 
-      db.all("SELECT player FROM players WHERE team = ?", [team], (err, rows) => {
-        if (err) return interaction.reply("❌ DB error");
+      db.all(
+        "SELECT player FROM players WHERE team = ?",
+        [team],
+        (err, rows) => {
+          if (err) return interaction.reply("❌ DB error");
 
-        const list = rows.map(r => r.player).join(", ") || "No players";
+          const list = rows.map(r => r.player).join(", ") || "No players";
 
-        interaction.reply(`📋 ${team} roster:\n${list}`);
-      });
+          interaction.reply(`📋 ${team} roster:\n${list}`);
+        }
+      );
     }
   } catch (err) {
     console.log(err);
 
     if (!interaction.replied) {
-      return interaction.reply("❌ Error occurred");
+      return interaction.reply("❌ Command error");
     }
   }
 });
