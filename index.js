@@ -8,27 +8,22 @@ const client = new Client({
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 
-// DATABASE
+// 🔥 DATABASE
 const db = new sqlite3.Database("./scw.db");
 
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS teams (name TEXT PRIMARY KEY)`);
   db.run(`CREATE TABLE IF NOT EXISTS players (player TEXT, team TEXT)`);
-  db.run(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`);
 });
 
-// COMMANDS (THIS IS WHY YOU ONLY SAW 2 BEFORE)
+// 🔥 ALL COMMANDS (THIS IS WHY YOU ONLY SAW 2 BEFORE)
 const commands = [
   { name: "help", description: "SCW help menu" },
-
-  {
-    name: "setup",
-    description: "Initialize SCW system",
-  },
+  { name: "setup", description: "Setup SCW system" },
 
   {
     name: "addteam",
-    description: "Create a team",
+    description: "Add a team",
     options: [
       {
         name: "name",
@@ -41,10 +36,20 @@ const commands = [
 
   {
     name: "sign-player",
-    description: "Sign player",
+    description: "Sign player to team",
     options: [
-      { name: "player", type: 3, required: true, description: "Player name" },
-      { name: "team", type: 3, required: true, description: "Team name" },
+      {
+        name: "player",
+        type: 3,
+        description: "Player name",
+        required: true,
+      },
+      {
+        name: "team",
+        type: 3,
+        description: "Team name",
+        required: true,
+      },
     ],
   },
 
@@ -52,7 +57,11 @@ const commands = [
     name: "release-player",
     description: "Release player",
     options: [
-      { name: "player", type: 3, required: true },
+      {
+        name: "player",
+        type: 3,
+        required: true,
+      },
     ],
   },
 
@@ -60,27 +69,38 @@ const commands = [
     name: "roster",
     description: "Show team roster",
     options: [
-      { name: "team", type: 3, required: true },
+      {
+        name: "team",
+        type: 3,
+        required: true,
+      },
     ],
   },
 ];
 
-// REGISTER SLASH COMMANDS
+// 🔥 DEBUG PRINT (IMPORTANT)
+console.log("=== SCW BOT FILE STARTED ===");
+console.log("Commands loaded:", commands.map(c => c.name));
+
+// 🔥 REGISTER COMMANDS
 const rest = new REST({ version: "10" }).setToken(TOKEN);
 
 async function registerCommands() {
   try {
     console.log("Registering slash commands...");
-    await rest.put(Routes.applicationCommands(CLIENT_ID), {
-      body: commands,
-    });
-    console.log("Slash commands registered.");
+
+    await rest.put(
+      Routes.applicationCommands(CLIENT_ID),
+      { body: commands }
+    );
+
+    console.log("✅ Slash commands registered successfully");
   } catch (err) {
-    console.log("Command register error:", err);
+    console.log("❌ Command registration error:", err);
   }
 }
 
-// READY EVENT
+// 🔥 READY
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
   console.log("SCW V2 CORE ONLINE");
@@ -88,24 +108,21 @@ client.once("ready", async () => {
   await registerCommands();
 });
 
-// INTERACTION HANDLER (THIS WAS YOUR MAIN ISSUE)
+// 🔥 COMMAND HANDLER
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   const cmd = interaction.commandName;
 
   try {
-    // HELP
     if (cmd === "help") {
       return interaction.reply("📘 SCW v2 System Online");
     }
 
-    // SETUP
     if (cmd === "setup") {
-      return interaction.reply("✅ SCW system is already running on Railway");
+      return interaction.reply("✅ SCW system is running on Railway");
     }
 
-    // ADD TEAM
     if (cmd === "addteam") {
       const name = interaction.options.getString("name");
 
@@ -114,7 +131,6 @@ client.on("interactionCreate", async (interaction) => {
       return interaction.reply(`✅ Team **${name}** created`);
     }
 
-    // SIGN PLAYER
     if (cmd === "sign-player") {
       const player = interaction.options.getString("player");
       const team = interaction.options.getString("team");
@@ -127,7 +143,6 @@ client.on("interactionCreate", async (interaction) => {
       return interaction.reply(`✅ ${player} signed to **${team}**`);
     }
 
-    // RELEASE PLAYER
     if (cmd === "release-player") {
       const player = interaction.options.getString("player");
 
@@ -136,7 +151,6 @@ client.on("interactionCreate", async (interaction) => {
       return interaction.reply(`🗑️ ${player} released`);
     }
 
-    // ROSTER
     if (cmd === "roster") {
       const team = interaction.options.getString("team");
 
@@ -151,8 +165,6 @@ client.on("interactionCreate", async (interaction) => {
           interaction.reply(`📋 ${team} roster:\n${list}`);
         }
       );
-
-      return;
     }
   } catch (err) {
     console.log(err);
@@ -163,5 +175,5 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-// LOGIN
+// 🔥 LOGIN
 client.login(TOKEN);
