@@ -5,7 +5,7 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
 });
 
-// ================= DB =================
+// ================= DATABASE =================
 const db = new sqlite3.Database("./scw.db");
 
 db.run(`CREATE TABLE IF NOT EXISTS setup (guild_id TEXT PRIMARY KEY, completed INTEGER DEFAULT 0)`);
@@ -17,7 +17,7 @@ db.run(`CREATE TABLE IF NOT EXISTS transactions_lock (id INTEGER PRIMARY KEY, lo
 
 db.run(`INSERT OR IGNORE INTO transactions_lock (id, locked) VALUES (1, 0)`);
 
-// ================= ACTION STYLE RESPONSES =================
+// ================= ACTION RESPONSE =================
 function action(interaction, text) {
   return interaction.reply({
     content: `⚙️ SCW SYSTEM → ${text}`,
@@ -25,9 +25,9 @@ function action(interaction, text) {
   });
 }
 
-// ================= PERMISSION SYSTEM =================
+// ================= PERMISSION SYSTEM (FIXED) =================
 async function getUserPermission(interaction) {
-  const roles = interaction.member.roles.cache.map(r => r.id);
+  const memberRoles = interaction.member.roles.cache.map(r => r.id);
 
   return new Promise((resolve) => {
     db.all(`SELECT * FROM role_permissions`, [], (err, rows) => {
@@ -36,7 +36,7 @@ async function getUserPermission(interaction) {
       let level = 0;
 
       for (const r of rows) {
-        if (roles.includes(r.role_id)) {
+        if (memberRoles.includes(r.role_id)) {
           if (r.role_type === "owner") level = Math.max(level, 3);
           if (r.role_type === "admin") level = Math.max(level, 2);
           if (r.role_type === "mod") level = Math.max(level, 1);
@@ -51,11 +51,13 @@ async function getUserPermission(interaction) {
 // ================= COMMANDS =================
 const commands = [
   { name: "setup", description: "Initialize SCW system" },
+
   {
     name: "addteam",
     description: "Create team",
     options: [{ name: "name", description: "Team name", type: 3, required: true }]
   },
+
   {
     name: "sign-player",
     description: "Sign player",
@@ -64,46 +66,55 @@ const commands = [
       { name: "team", description: "Team", type: 3, required: true }
     ]
   },
+
   {
     name: "release-player",
     description: "Release player",
     options: [{ name: "user", description: "Player", type: 6, required: true }]
   },
+
   {
     name: "strike",
     description: "Strike player",
     options: [{ name: "user", description: "Player", type: 6, required: true }]
   },
+
   {
     name: "warn",
     description: "Warn player",
     options: [{ name: "user", description: "Player", type: 6, required: true }]
   },
+
   {
     name: "ban",
     description: "Ban player",
     options: [{ name: "user", description: "Player", type: 6, required: true }]
   },
+
   {
     name: "kick",
     description: "Kick player",
     options: [{ name: "user", description: "Player", type: 6, required: true }]
   },
+
   {
     name: "mute",
     description: "Mute player",
     options: [{ name: "user", description: "Player", type: 6, required: true }]
   },
+
   {
     name: "add-admin-role",
     description: "Set admin role",
     options: [{ name: "role", description: "Role", type: 8, required: true }]
   },
+
   {
     name: "add-mod-role",
     description: "Set mod role",
     options: [{ name: "role", description: "Role", type: 8, required: true }]
   },
+
   { name: "transactions-lock", description: "Lock trades" },
   { name: "transactions-unlock", description: "Unlock trades" }
 ];
@@ -130,43 +141,67 @@ client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   const cmd = interaction.commandName;
+  const guild = interaction.guild;
+
   const perm = await getUserPermission(interaction);
 
-  // ================= SETUP =================
+  // ================= AUTO FIX OWNER PROBLEM =================
+  // Server owner ALWAYS gets owner role automatically
   if (cmd === "setup") {
-    db.get(`SELECT * FROM setup WHERE guild_id = ?`, [interaction.guild.id], (err, row) => {
-      if (err) return action(interaction, "Database error");
+    return db.get(
+      `SELECT * FROM setup WHERE guild_id = ?`,
+      [guild.id],
+      async (err, row) => {
+        if (err) return action(interaction, "DB error");
 
-      if (row?.completed === 1) {
-        return action(interaction, "Server already initialized");
+        if (row?.completed === 1) {
+          return action(interaction, "Already initialized");
+        }
+
+        db.run(
+          `INSERT OR REPLACE INTO setup (guild_id, completed) VALUES (?, 1)`,
+          [guild.id]
+        );
+
+        // create owner role automatically
+        const ownerRole = await guild.roles.create({ name: "SCW Owner" }).catch(() => null);
+
+        if (ownerRole) {
+          db.run(
+            `INSERT OR REPLACE INTO role_permissions (role_id, role_type) VALUES (?, ?)`,
+            [ownerRole.id, "owner"]
+          );
+
+          await interaction.member.roles.add(ownerRole).catch(() => {});
+        }
+
+        return action(interaction, "System initialized + OWNER granted");
       }
-
-      db.run(
-        `INSERT OR REPLACE INTO setup (guild_id, completed) VALUES (?, 1)`,
-        [interaction.guild.id]
-      );
-
-      return action(interaction, "System initialized successfully");
-    });
+    );
   }
 
-  // ================= ADD TEAM =================
+  // ================= SAFE CHECK (NO MORE LOCKOUT) =================
+  const isOwner = perm >= 3;
+  const isAdmin = perm >= 2;
+  const isMod = perm >= 1;
+
+  // ================= TEAM =================
   if (cmd === "addteam") {
     const name = interaction.options.getString("name");
 
-    db.run(`INSERT INTO teams (name) VALUES (?)`, [name], (err) => {
-      if (err) return action(interaction, "Failed to create team");
+    return db.run(`INSERT INTO teams (name) VALUES (?)`, [name], (err) => {
+      if (err) return action(interaction, "Team failed");
 
       return action(interaction, `Team created → ${name}`);
     });
   }
 
-  // ================= SIGN PLAYER =================
+  // ================= PLAYER =================
   if (cmd === "sign-player") {
     const user = interaction.options.getUser("user");
     const team = interaction.options.getString("team");
 
-    db.run(
+    return db.run(
       `INSERT INTO players (user_id, team) VALUES (?, ?)`,
       [user.id, team],
       (err) => {
@@ -177,22 +212,25 @@ client.on("interactionCreate", async (interaction) => {
     );
   }
 
-  // ================= RELEASE =================
   if (cmd === "release-player") {
     const user = interaction.options.getUser("user");
 
-    db.run(`DELETE FROM players WHERE user_id = ?`, [user.id], (err) => {
-      if (err) return action(interaction, "Release failed");
+    return db.run(
+      `DELETE FROM players WHERE user_id = ?`,
+      [user.id],
+      (err) => {
+        if (err) return action(interaction, "Release failed");
 
-      return action(interaction, `${user.username} released`);
-    });
+        return action(interaction, `${user.username} released`);
+      }
+    );
   }
 
   // ================= MOD ACTIONS =================
   const mods = ["strike", "warn", "ban", "kick", "mute"];
 
   if (mods.includes(cmd)) {
-    if (perm < 1) return action(interaction, "No permission");
+    if (!isMod) return action(interaction, "No permission");
 
     const user = interaction.options.getUser("user");
 
@@ -204,9 +242,9 @@ client.on("interactionCreate", async (interaction) => {
     return action(interaction, `${cmd.toUpperCase()} → ${user.username}`);
   }
 
-  // ================= ROLES =================
+  // ================= ROLE SYSTEM =================
   if (cmd === "add-admin-role") {
-    if (perm < 3) return action(interaction, "No permission");
+    if (!isOwner) return action(interaction, "No permission");
 
     const role = interaction.options.getRole("role");
 
@@ -219,7 +257,7 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   if (cmd === "add-mod-role") {
-    if (perm < 3) return action(interaction, "No permission");
+    if (!isOwner) return action(interaction, "No permission");
 
     const role = interaction.options.getRole("role");
 
@@ -233,14 +271,14 @@ client.on("interactionCreate", async (interaction) => {
 
   // ================= TRANSACTIONS =================
   if (cmd === "transactions-lock") {
-    if (perm < 2) return action(interaction, "No permission");
+    if (!isAdmin) return action(interaction, "No permission");
 
     db.run(`UPDATE transactions_lock SET locked = 1 WHERE id = 1`);
     return action(interaction, "Transactions locked");
   }
 
   if (cmd === "transactions-unlock") {
-    if (perm < 2) return action(interaction, "No permission");
+    if (!isAdmin) return action(interaction, "No permission");
 
     db.run(`UPDATE transactions_lock SET locked = 0 WHERE id = 1`);
     return action(interaction, "Transactions unlocked");
