@@ -1,9 +1,7 @@
 const { Client, GatewayIntentBits } = require("discord.js");
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds
-  ]
+  intents: [GatewayIntentBits.Guilds]
 });
 
 client.once("ready", () => {
@@ -13,16 +11,15 @@ client.once("ready", () => {
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
-  // TEST COMMAND (to confirm bot works)
-  if (interaction.commandName === "ping") {
-    await interaction.reply("Pong!");
+  try {
+    // THIS STOPS "APPLICATION DID NOT RESPOND"
+    await interaction.reply({
+      content: `Command received: /${interaction.commandName}`,
+      ephemeral: true
+    });
+  } catch (err) {
+    console.error("Error handling command:", err);
   }
-
-  // 🔥 ADD YOUR SCW COMMANDS BELOW THIS LINE
-  // Example:
-  // if (interaction.commandName === "sign-player") {
-  //   await interaction.reply("Player signed!");
-  // }
 });
 
 client.login(process.env.DISCORD_TOKEN);
